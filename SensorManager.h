@@ -20,13 +20,13 @@ public:
     SensorManager();
     
     // Initialisierung
-    void begin(float frequency = 100.0);
-    
-    // Hauptfunktion: Sensordaten aktualisieren
-    void update();
+    void begin(/* float frequency = 100.0 */);
+
+    // PRIMARY Getter für alle berechneten Sensordaten
+    void getCalculatedData(Quaternion& quat, float& ax, float& ay, float& az);
     
     // Getter für Quaternion
-    void getRotationQuaternion(float& q0, float& q1, float& q2, float& q3);
+    // void getRotationQuaternion(float& q0, float& q1, float& q2, float& q3);
     
     // Getter für Beschleunigung
     void getAccelValues(float& ax, float& ay, float& az);
@@ -43,7 +43,7 @@ public:
 private:
     // AHRS-Objekte
     ReefwingAHRS ahrs;
-    SensorData sensorData;
+    SensorData data;
     
     // Kalibrierung
     NanoBLEFlashPrefs flashPrefs;
