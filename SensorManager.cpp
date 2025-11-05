@@ -28,9 +28,20 @@ int loopFrequency = 0;
 const long displayPeriod = 100;  // 100ms = 10 Hz Display
 unsigned long previousMillis = 0;
 
-void setup() {
-  Serial.begin(115200);
-  while (!Serial) delay(10);     // DEBUG!
+// ==========================
+
+// Konstruktor
+SensorManager::SensorManager() {
+  loopFrequency = 0;
+  previousMillis = 0;
+  gx_off = gy_off = gz_off = 0;
+  ax_off = ay_off = az_off = 0;
+}
+void SensorManager::begin() {
+/*   if(!Serial){
+    Serial.begin(115200);
+  }
+  while (!Serial) delay(10); */     // DEBUG!
 
   Serial.println("=== AHRS Initialisierung ===");
   
@@ -68,8 +79,7 @@ void setup() {
   ahrs.setFusionAlgorithm(SensorFusion::MAHONY);    // TODO: DEBUG beide
   // ODER: ahrs.setFusionAlgorithm(SensorFusion::MADGWICK);
   
-  // Setze magnetische Deklination für Deutschland
-  ahrs.setDeclination(3.5);
+  ahrs.setDeclination(3.5); // Deklination für Deutschland (durchschnittlich)
   
   Serial.println();
   Serial.println("========== AHRS bereit ==========");
@@ -81,7 +91,7 @@ void setup() {
   delay(2000);
 }
 
-void calibrateGyro() {
+void SensorManager::calibrateGyro() {
   Serial.println("Kalibriere Gyroskop... Stillhalten!");
 
   float gx_off_calc, gy_off_calc, gz_off_calc;
@@ -103,12 +113,12 @@ void calibrateGyro() {
   Serial.println(gz_off, 2);
 }
 
-void calibrateAccel() {
+void SensorManager::calibrateAccel() {
 Serial.println("Kalibriere Accelerometer... Stillhalten!");
 
   float ax_off_calc, ay_off_calc, az_off_calc;
   for(int i = 1; i<=CALIBRATION_SAMPLES; i++){
-    IMU.readGyroscope(data.ax, data.ay, data.az);
+    IMU.readAcceleration(data.ax, data.ay, data.az);
     ax_off_calc += data.ax;
     ay_off_calc += data.ay;
     az_off_calc += data.az;
@@ -125,19 +135,12 @@ Serial.println("Kalibriere Accelerometer... Stillhalten!");
   Serial.println(az_off, 2);
 }
 
-void loop() {
-
-}
-
 // ==========================
 // === LIBRARY FUNCTIONS ===
 // ==========================
 
-void begin(float FREQUENCY){
 
-}
-
-void ahrsMeasure(){
+void SensorManager::ahrsMeasure(){
   // Lese Sensordaten
   if (IMU.gyroscopeAvailable()) {
     IMU.readGyroscope(data.gx, data.gy, data.gz);
@@ -192,7 +195,7 @@ void ahrsMeasure(){
   loopFrequency++; */
 }
 
-void getRotationQuaternion(float& q0, float& q1, float& q2, float& q3){
+/* void SensorManager::getRotationQuaternion(float& q0, float& q1, float& q2, float& q3){
   Quaternion filteredRotation = ahrs.getQuaternion();
   // TODO:
   // float smoothedRotation = smoothData4D(filteredRotation.q0, filteredRotation.q1, filteredRotation.q2, filteredRotation.q3,);
@@ -201,23 +204,29 @@ void getRotationQuaternion(float& q0, float& q1, float& q2, float& q3){
   q2 = filteredRotation.q2;
   q3 = filteredRotation.q3;
   return;
-}
+} */
 
-void getAccelValues(float& ax, float& ay, float& az){
+void SensorManager::getAccelValues(float& ax, float& ay, float& az){
   ax = data.ax;
   ay = data.ay;
   az = data.az;
   return;
 }
 
-void getTemperature(float& celsius){
+void SensorManager::getTemperature(float& celsius){
   // TODO: Implementieren
   celsius = 67; // DEBUG
 }
 
-void getCalculatedData(){
+void SensorManager::getCalculatedData(Quaternion& _quat, float& ax, float& ay, float& az){
     // MAIN Function um die Sensordaten zu erhalten
     ahrsMeasure();
-    getRotationQuaternion(data.q0, data.q1, data.q2, data.q3);
+    _quat = ahrs.getQuaternion();
+    getAccelValues(ax, ay, az);
     // TODO: SMOOTHING
+    return;
 }
+
+/* int SensorManager::getLoopFrequency() {
+  return loopFrequency;
+} */
