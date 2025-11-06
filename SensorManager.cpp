@@ -1,9 +1,39 @@
+/*
+ *  SensorManager für unseren ARDUINO NANO 33 BLE SENSE REV 2
+ *
+ *  Initialisiert und kalibriert Onboard Sensoren
+ *  Liest die Werte der 9-Achsen Sensoren (IMU und Magno), sowie Temperatur und Druck aus
+ *  Berechnet aktuelle Rotationslage durch AHRS Funktionen 
+ *
+ *  RETURNS:
+ *  - Rotation im Raum (Quaternion) - geglättet, kalkuliert
+ *  - Beschleunigung   (a)          - 3 Achsen
+ *  // TODO:
+ *  - Temperatur       (°C)
+ *  - Timestamp        (millis)
+ *  - Magnetometer     (T)          - 3 Achsen
+ *  - Luftdruck        (bar)
+ *
+ *  DEPENDENCIES:
+ *  - ReefwingAHRS    | AHRS Library zum berechnen der Rotation anhand 9-Achsen Sensoren, verwendet Mahony oder Madgwick
+ *  - FlashPrefs      | Auslesen des internen Flash Speichers (verwendet für Kalibrierung vom Magnetometer)
+ *  - BMI270_BMM150   | Auslesen der Sensordaten in Echtzeit der eingebauten BOSCH Sensoren des Arduino Nano
+ *  - SmoothData4D    | GHOSTBOX Library für Deadzone, Filter für Vibration & Noise und Glättung
+ *
+ *  AUTOREN:
+ *  ~ Team Ghostbox-Videofeed
+ *  ~ D.R., ...
+ */
+
 #include <ReefwingAHRS.h>           // AHRS Bibliothek zum Glätten, abgestimmt auf unseren Arduino. Unterstützt Madgwick und Mahony.
 #include <NanoBLEFlashPrefs.h>      // Bibliothek um den Nano Flash Speicher auszulesen. Verwenden wir für Magnetometer Kalibrierung.
 #include "Arduino_BMI270_BMM150.h"  // Bibliothek für den BMI270 Beschleunigungssensor und BMM150 Magnetometer
 #include "SmoothData4D.h"           // GHOSTBOX-eigene Bibliothek um die Werte zu Glätten und Vibration wie Noise zu filtern
+#include "SensorManager.h"
 
-// KALIBRIERUNG
+#define CALIBRATION_SAMPLES 200
+
+/* // KALIBRIERUNG
 // Kalibrierungs-Struktur
 typedef struct {
   float magOffsetX;
@@ -12,7 +42,6 @@ typedef struct {
   bool isCalibrated;
 } MagCalibration;
 
-#define CALIBRATION_SAMPLES 200
 float gx_off, gy_off, gz_off;
 float ax_off, ay_off, az_off;
 
@@ -27,6 +56,7 @@ SensorData data;
 int loopFrequency = 0;
 const long displayPeriod = 100;  // 100ms = 10 Hz Display
 unsigned long previousMillis = 0;
+ */
 
 // ==========================
 
@@ -37,11 +67,8 @@ SensorManager::SensorManager() {
   gx_off = gy_off = gz_off = 0;
   ax_off = ay_off = az_off = 0;
 }
-void SensorManager::begin() {
-/*   if(!Serial){
-    Serial.begin(115200);
-  }
-  while (!Serial) delay(10); */     // DEBUG!
+
+void SensorManager::init() {
 
   Serial.println("=== AHRS Initialisierung ===");
   
@@ -54,7 +81,7 @@ void SensorManager::begin() {
   Serial.println("✓ IMU initialisiert");
   
   // Lade Magnetometer Kalibrierung aus dem Flash
-  int rc = myFlashPrefs.readPrefs(&magCal, sizeof(magCal));
+  int rc = flashPrefs.readPrefs(&magCal, sizeof(magCal));
   
   if (rc == 0 && magCal.isCalibrated) {
     Serial.println("✓ Magnetometer-Kalibrierung geladen:");
@@ -94,7 +121,7 @@ void SensorManager::begin() {
 void SensorManager::calibrateGyro() {
   Serial.println("Kalibriere Gyroskop... Stillhalten!");
 
-  float gx_off_calc, gy_off_calc, gz_off_calc;
+  float gx_off_calc = 0, gy_off_calc = 0, gz_off_calc = 0;
   for(int i = 1; i<=CALIBRATION_SAMPLES; i++){
     IMU.readGyroscope(data.gx, data.gy, data.gz);
     gx_off_calc += data.gx;
@@ -116,7 +143,7 @@ void SensorManager::calibrateGyro() {
 void SensorManager::calibrateAccel() {
 Serial.println("Kalibriere Accelerometer... Stillhalten!");
 
-  float ax_off_calc, ay_off_calc, az_off_calc;
+  float ax_off_calc = 0, ay_off_calc = 0, az_off_calc = 0;
   for(int i = 1; i<=CALIBRATION_SAMPLES; i++){
     IMU.readAcceleration(data.ax, data.ay, data.az);
     ax_off_calc += data.ax;
@@ -124,10 +151,11 @@ Serial.println("Kalibriere Accelerometer... Stillhalten!");
     az_off_calc += data.az;
     delay(5);
   }
+  
   // Kalibrierung durch Mittelwert
   ax_off = ax_off_calc / CALIBRATION_SAMPLES;
   ay_off = ay_off_calc / CALIBRATION_SAMPLES;
-  az_off = az_off_calc / CALIBRATION_SAMPLES;
+  az_off = az_off_calc / CALIBRATION_SAMPLES - 1;
   Serial.println("✓ Accelerometer kalibriert");
   Serial.print("Offsets: ");
   Serial.print(ax_off, 2); Serial.print(", ");
@@ -135,10 +163,22 @@ Serial.println("Kalibriere Accelerometer... Stillhalten!");
   Serial.println(az_off, 2);
 }
 
+// DEBUG
+void debugMeasurements(Quaternion _Q, float ax, float ay, float az) {
+  Serial.println("");
+  Serial.print("Q0: "); Serial.print(_Q.q0); Serial.print(" |\t");
+  Serial.print("Q1: "); Serial.print(_Q.q1); Serial.print(" |\t");
+  Serial.print("Q2: "); Serial.print(_Q.q2); Serial.print(" |\t");
+  Serial.print("Q3: "); Serial.print(_Q.q3); Serial.print(" |\t");
+
+  Serial.print("aX: "); Serial.print(ax); Serial.print(" |\t");
+  Serial.print("aY: "); Serial.print(ay); Serial.print(" |\t");
+  Serial.print("aZ: "); Serial.print(az); Serial.print(" |\t");
+}
+
 // ==========================
 // === LIBRARY FUNCTIONS ===
 // ==========================
-
 
 void SensorManager::ahrsMeasure(){
   // Lese Sensordaten
@@ -156,6 +196,8 @@ void SensorManager::ahrsMeasure(){
     data.ax -= ax_off;
     data.ay -= ay_off;
     data.az -= az_off;
+  } else {
+    Serial.println("ERROR: CANT READ ACCEL!!1!11!");
   }
   
   if (IMU.magneticFieldAvailable()) {
@@ -173,38 +215,7 @@ void SensorManager::ahrsMeasure(){
   // Übergebe Daten an AHRS und update
   ahrs.setData(data);
   ahrs.update();
-  
-/*   // Zeige Daten periodisch an
-  if (millis() - previousMillis >= displayPeriod) {
-    Serial.print("R: ");
-    Serial.print(ahrs.angles.roll, 1);
-    Serial.print("° | \t P: ");
-    Serial.print(ahrs.angles.pitch, 1);
-    Serial.print("° | \t Y: ");
-    Serial.print(ahrs.angles.yaw, 1);
-    Serial.print("° | \t H: ");
-    Serial.print(ahrs.angles.heading, 1);
-    Serial.print("° | ");
-    Serial.print(loopFrequency);
-    Serial.println(" Hz");
-    
-    loopFrequency = 0;
-    previousMillis = millis();
-  }
-  
-  loopFrequency++; */
 }
-
-/* void SensorManager::getRotationQuaternion(float& q0, float& q1, float& q2, float& q3){
-  Quaternion filteredRotation = ahrs.getQuaternion();
-  // TODO:
-  // float smoothedRotation = smoothData4D(filteredRotation.q0, filteredRotation.q1, filteredRotation.q2, filteredRotation.q3,);
-  q0 = filteredRotation.q0;
-  q1 = filteredRotation.q1;
-  q2 = filteredRotation.q2;
-  q3 = filteredRotation.q3;
-  return;
-} */
 
 void SensorManager::getAccelValues(float& ax, float& ay, float& az){
   ax = data.ax;
@@ -224,8 +235,12 @@ void SensorManager::getCalculatedData(Quaternion& _quat, float& ax, float& ay, f
     _quat = ahrs.getQuaternion();
     getAccelValues(ax, ay, az);
     // TODO: SMOOTHING
+    // DEBUG: 
+    debugMeasurements(_quat, ax, ay, az);
     return;
 }
+
+
 
 /* int SensorManager::getLoopFrequency() {
   return loopFrequency;
