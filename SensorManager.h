@@ -4,7 +4,7 @@
 #include <ReefwingAHRS.h>
 #include <NanoBLEFlashPrefs.h>
 #include "Arduino_BMI270_BMM150.h"
-#include "SmoothData4D.h"
+//#include "SmoothData4D.h"
 
 // Kalibrierungs-Struktur
 typedef struct {
@@ -20,7 +20,7 @@ public:
     SensorManager();
     
     // Initialisierung
-    void begin(/* float frequency = 100.0 */);
+    void init(/* int FREQUENCY = 30, int CALIBRATION_SAMPLES = 200 */);
 
     // PRIMARY Getter für alle berechneten Sensordaten
     void getCalculatedData(Quaternion& quat, float& ax, float& ay, float& az);
@@ -61,9 +61,10 @@ private:
     void calibrateGyro();
     void calibrateAccel();
     void loadMagCalibration();
+    int CALIBRATION_SAMPLES;
     
     // Sensor-Messung
-    void measureSensors();
+    void ahrsMeasure();
 };
 
 #endif
