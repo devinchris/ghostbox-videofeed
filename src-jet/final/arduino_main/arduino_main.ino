@@ -1,0 +1,125 @@
+#include <ArduinoBLE.h>
+#include "SensorManager.h"
+#include "SmoothData4D.h"
+ 
+#define DELAY 100
+
+// Single Sensor Sample (32 Bytes)
+struct SensorValues {
+  uint32_t timestamp_ms;        // in ms
+  float accelX, accelY, accelZ; // in m/s
+  float q0, q1, q2, q3;         // in Grad
+  float magX, magY, magZ;       // in Tesla    
+  float tempC;                  // in Celsius
+} __attribute__((packed));      // Verhindert Padding
+ 
+SensorValues sensorData;
+const unsigned long sendInterval = 100;
+unsigned long lastSendTime;
+float tempC;
+ 
+// Create BLE Service
+BLEService myService("19B10000-E8F2-537E-4F6C-D104768A1214");
+
+// === SensorManager ===
+SensorManager sensor;
+Quaternion _Quaternion;
+float ax = 0, ay = 0, az = 0;
+SmoothQuaternionData smoothing;  // Korrekter Klassenname
+
+// =====================
+
+// Create BLE Characteristic with READ, WRITE, and NOTIFY
+BLECharacteristic myCharacteristic("19B10001-E8F2-537E-4F6C-D104768A1214",
+                                          BLERead | BLEWrite | BLENotify, sizeof(SensorValues));
+ 
+void setup() {
+  Serial.begin(9600);
+  // while (!Serial);
+ 
+  // Initialize BLE
+  if (!BLE.begin()) {
+    Serial.println("Starting BLE failed!");
+    while (1);
+  }
+ 
+  BLE.setConnectionInterval(6, 6);
+  BLE.setAdvertisingInterval(160);
+  // Set advertised local name and service
+  BLE.setLocalName("Nano");
+  BLE.setDeviceName("Nano");
+ 
+  BLE.setAdvertisedService(myService);
+ 
+  // Add characteristic to service
+  myService.addCharacteristic(myCharacteristic);
+ 
+  // Add service
+  BLE.addService(myService);
+ 
+  // Set initial value
+  myCharacteristic.writeValue("Ready");
+ 
+  // Start advertising
+  BLE.advertise();
+ 
+  Serial.println("Bluetooth device active, waiting for connections...");
+
+  sensor.init();
+
+  // Initialisiere Smoothing mit Target-Frequenz und Alpha-Wert
+  // Target-Frequenz sollte der Sensor-Update-Rate entsprechen (z.B. 100 Hz)
+  // Alpha: 0.55 = mittlere Glättung (0.01 = sehr stark, 0.99 = fast keine Glättung)
+  smoothing.initSmoothing(10.0f, 0.55f);
+}
+ 
+void loop() {
+  // Listen for BLE centrals to connect
+  BLEDevice central = BLE.central();
+ 
+  if (central) {
+    Serial.print("Connected to central: ");
+    Serial.println(central.address());
+   
+    int counter = 0;
+   
+    // While the central is connected
+    while (central.connected()) {
+      if(millis() - lastSendTime >= sendInterval){
+        lastSendTime = millis();
+        
+        // Hole Sensordaten vom SensorManager
+        sensor.getCalculatedData(_Quaternion, ax, ay, az);
+        sensor.getTemperature(tempC);
+        
+        // WICHTIG: Glätte das Quaternion mit SmoothData4D
+        // Das Quaternion wird direkt modifiziert (Pass-by-Reference)
+        smoothing.smoothQuaternions(_Quaternion, millis());
+    
+        // Fülle SensorData Struktur mit geglätteten Werten
+        sensorData.timestamp_ms = millis();
+        sensorData.accelX = ax;
+        sensorData.accelY = ay;
+        sensorData.accelZ = az;
+        sensorData.q0 = _Quaternion.q0;  // Geglättete Werte!
+        sensorData.q1 = _Quaternion.q1;
+        sensorData.q2 = _Quaternion.q2;
+        sensorData.q3 = _Quaternion.q3;
+        sensorData.magX = 0.001;
+        sensorData.magY = 0.002;
+        sensorData.magZ = 0.003;
+        sensorData.tempC = tempC;
+      
+      
+        myCharacteristic.writeValue((byte*)&sensorData, sizeof(sensorData));
+        //Andi war hier <- What the helly?
+      }
+     
+     //delay(DELAY);  
+    }
+   
+    Serial.print("Disconnected from central: ");
+    Serial.println(central.address());
+  }
+}
+ 

@@ -1,0 +1,415 @@
+"""
+Eurofighter 3D Model Renderer mit Arduino Gyro-Steuerung
+Optimiert für minimale Latenz bei gleichzeitig smoothem Rendering
+Rendering Engine: Panda3D
+"""
+
+from direct.showbase.ShowBase import ShowBase
+from panda3d.core import * 
+import serial
+import serial.tools.list_ports
+import threading
+import numpy as np
+from collections import deque
+import time
+
+# ==================== KONFIGURATION ====================
+class Config:
+    """Zentrale Konfigurationsklasse"""
+    # Arduino Einstellungen
+    SERIAL_BAUD_RATE = 115200  # Höhere Baudrate für niedrigere Latenz
+    SERIAL_TIMEOUT = 0.001     # Minimales Timeout für schnelle Reads
+    
+    # Display Einstellungen
+    WINDOW_WIDTH = 1280
+    WINDOW_HEIGHT = 720
+    FOV = 45
+    
+    # Rendering Optimierung
+    SMOOTHING_WINDOW = 3       # Kleine Glättung (höher = smoother, aber mehr Latenz)
+    MODEL_DISTANCE = 8.0       # Kamera-Distanz zum Modell
+    
+    # Model Einstellungen
+    GLB_FILE_PATH = "Eurofighter_Typhoon.glb"  # Pfad zur GLB-Datei
+    
+    # Performance
+    FRAMERATE_LIMIT = 0        # 0 = unbegrenzt für minimale Latenz
+
+
+# ==================== SERIAL KOMMUNIKATION ====================
+class ArduinoConnection:
+    """Verwaltet die serielle Verbindung zum Arduino"""
+    
+    def __init__(self, port=None, baudrate=Config.SERIAL_BAUD_RATE):
+        self.serial_port = 9600     # Standard: 9600
+        self.is_connected = False
+        self.port = port
+        self.baudrate = baudrate
+        
+    def find_arduino(self):
+        """Automatische Erkennung des Arduino-Ports"""
+        ports = serial.tools.list_ports.comports()
+        for port in ports:
+            if 'Arduino' in port.description or 'CH340' in port.description or 'USB' in port.description:
+                return port.device
+        return None
+    
+    def connect(self):
+        """Stelle Verbindung zum Arduino her"""
+        try:
+            if self.port is None:
+                self.port = self.find_arduino()
+            
+            if self.port is None:
+                print("Kein Arduino gefunden. Verfügbare Ports:")
+                for port in serial.tools.list_ports.comports():
+                    print(f"  - {port.device}: {port.description}")
+                return False
+            
+            self.serial_port = serial.Serial(
+                port=self.port,
+                baudrate=self.baudrate,
+                timeout=Config.SERIAL_TIMEOUT
+            )
+            time.sleep(2)  # Warte auf Arduino-Reset
+            self.is_connected = True
+            print(f"Verbunden mit Arduino auf {self.port}")
+            return True
+            
+        except Exception as e:
+            print(f"Fehler bei Verbindung: {e}")
+            return False
+    
+    def read_rotation_data(self):
+        """
+        Liest Rotationsdaten vom Arduino
+        Erwartet Format: "roll,pitch,yaw\n" (in Grad)
+        """
+        if not self.is_connected or self.serial_port is None:
+            return None
+        
+        try:
+            if self.serial_port.in_waiting > 0:
+                line = self.serial_port.readline().decode('utf-8').strip()
+                values = line.split(',')
+                
+                if len(values) == 3:
+                    roll = float(values[0])
+                    pitch = float(values[1])
+                    yaw = float(values[2])
+                    return (roll, pitch, yaw)
+        except Exception as e:
+            print(f"Fehler beim Lesen: {e}")
+        
+        return None
+    
+    def close(self):
+        """Schließe die serielle Verbindung"""
+        if self.serial_port and self.serial_port.is_open:
+            self.serial_port.close() 
+            self.is_connected = False
+
+
+# ==================== ROTATIONSVERWALTUNG ====================
+class RotationManager:
+    """Verwaltet Rotationsdaten mit optionaler Glättung"""
+    
+    def __init__(self, smoothing_window=Config.SMOOTHING_WINDOW):
+        self.current_rotation = np.array([0.0, 0.0, 0.0])
+        self.smoothing_window = smoothing_window
+        
+        # Ringpuffer für Glättung (minimale Latenz)
+        self.roll_buffer = deque(maxlen=smoothing_window)
+        self.pitch_buffer = deque(maxlen=smoothing_window)
+        self.yaw_buffer = deque(maxlen=smoothing_window)
+        
+        self.lock = threading.Lock()
+    
+    def update_rotation(self, roll, pitch, yaw):
+        """
+        Aktualisiert die Rotation mit neuen Werten
+        Wendet minimale Glättung für smooth appearance an
+        """
+        with self.lock:
+            # Füge neue Werte hinzu
+            self.roll_buffer.append(roll)
+            self.pitch_buffer.append(pitch)
+            self.yaw_buffer.append(yaw)
+            
+            # Berechne geglättete Werte (schneller Moving Average)
+            self.current_rotation[0] = np.mean(self.roll_buffer)
+            self.current_rotation[1] = np.mean(self.pitch_buffer)
+            self.current_rotation[2] = np.mean(self.yaw_buffer)
+    
+    def get_rotation(self):
+        """Gibt die aktuelle Rotation zurück"""
+        with self.lock:
+            return self.current_rotation.copy()
+    
+    def set_rotation_direct(self, roll, pitch, yaw):
+        """Setzt Rotation direkt ohne Glättung (für Tests)"""
+        with self.lock:
+            self.current_rotation = np.array([roll, pitch, yaw])
+
+
+# ==================== PANDA3D RENDERER ====================
+class EurofighterRenderer(ShowBase):
+    """Hauptrenderer mit Panda3D - erbt von ShowBase"""
+    
+    def __init__(self, glb_path, rotation_manager, arduino):
+        # Konfiguriere Panda3D vor ShowBase-Initialisierung
+        self.configure_panda3d()
+        
+        # Initialisiere ShowBase (Panda3D Engine)
+        ShowBase.__init__(self)
+        
+        self.rotation_manager = rotation_manager
+        self.arduino = arduino
+        self.model = None
+        
+        # Performance Tracking
+        self.frame_times = deque(maxlen=60)
+        self.last_frame_time = time.time()
+        self.frame_count = 0
+        
+        # Setup
+        self.setup_window()
+        self.setup_camera()
+        self.setup_lighting()
+        self.load_model(glb_path)
+        
+        # Task für Update-Loop (minimale Latenz)
+        self.taskMgr.add(self.update_task, "update_rotation")
+        
+        # FPS Counter Task
+        self.taskMgr.add(self.fps_counter_task, "fps_counter")
+        
+        print("\nPanda3D Renderer initialisiert")
+        print("Drücke ESC zum Beenden")
+    
+    def configure_panda3d(self):
+        """Konfiguriert Panda3D für optimale Performance"""
+        # Lade Config
+        loadPrcFileData("", f"win-size {Config.WINDOW_WIDTH} {Config.WINDOW_HEIGHT}")
+        loadPrcFileData("", "window-title Eurofighter 3D - Arduino Steuerung")
+        loadPrcFileData("", "show-frame-rate-meter false")  # Eigener FPS Counter
+        loadPrcFileData("", "sync-video false")  # VSync aus für minimale Latenz
+        loadPrcFileData("", "gl-version 3 2")  # OpenGL 3.2
+        
+        # Performance Optimierungen
+        if Config.FRAMERATE_LIMIT > 0:
+            loadPrcFileData("", f"clock-frame-rate {Config.FRAMERATE_LIMIT}")
+        else:
+            loadPrcFileData("", "clock-frame-rate 0")  # Unbegrenzt
+        
+        # Rendering Qualität
+        loadPrcFileData("", "framebuffer-multisample 1")  # MSAA
+        loadPrcFileData("", "multisamples 4")  # 4x Antialiasing
+        loadPrcFileData("", "texture-anisotropic-degree 16")
+    
+    def setup_window(self):
+        """Konfiguriert das Fenster"""
+        # Hintergrundfarbe (dunkles Blau für Sky-Look)
+        self.setBackgroundColor(0.1, 0.15, 0.25, 1)
+        
+        # Escape-Taste zum Beenden
+        self.accept('escape', self.cleanup_and_exit)
+    
+    def setup_camera(self):
+        """Positioniert und konfiguriert die Kamera"""
+        self.cam.setPos(0, -Config.MODEL_DISTANCE, 0)
+        self.cam.lookAt(0, 0, 0)
+        
+        # FOV einstellen
+        lens = self.cam.node().getLens()
+        lens.setFov(Config.FOV)
+    
+    def setup_lighting(self):
+        """Richtet Beleuchtung ein für optimales Model-Rendering"""
+        # Ambient Light (Grundhelligkeit)
+        ambient_light = AmbientLight("ambient")
+        ambient_light.setColor((0.3, 0.3, 0.35, 1))
+        ambient_np = self.render.attachNewNode(ambient_light)
+        self.render.setLight(ambient_np)
+        
+        # Directional Light (Hauptlicht - von oben vorne)
+        directional_light = DirectionalLight("directional")
+        directional_light.setColor((0.8, 0.8, 0.9, 1))
+        directional_np = self.render.attachNewNode(directional_light)
+        directional_np.setHpr(45, -45, 0)
+        self.render.setLight(directional_np)
+        
+        # Fill Light (weicheres Licht von unten für Details)
+        fill_light = DirectionalLight("fill")
+        fill_light.setColor((0.3, 0.3, 0.35, 1))
+        fill_np = self.render.attachNewNode(fill_light)
+        fill_np.setHpr(-45, 45, 0)
+        self.render.setLight(fill_np)
+    
+    def load_model(self, glb_path):
+        """Lädt das GLB-Modell"""
+        try:
+            print(f"Lade Modell: {glb_path}")
+            
+            # Lade das Modell (Panda3D unterstützt GLB/GLTF nativ)
+            self.model = self.loader.loadModel(glb_path)
+            
+            if self.model is None:
+                print("FEHLER: Modell konnte nicht geladen werden!")
+                return False
+            
+            # Füge Modell zur Scene hinzu
+            self.model.reparentTo(self.render)
+            
+            # Zentriere und skaliere das Modell
+            bounds = self.model.getTightBounds()
+            if bounds:
+                min_point, max_point = bounds
+                center = (min_point + max_point) / 2
+                size = max_point - min_point
+                max_dimension = max(size.getX(), size.getY(), size.getZ())
+                
+                # Zentriere
+                self.model.setPos(-center)
+                
+                # Skaliere auf vernünftige Größe
+                scale = 2.0 / max_dimension if max_dimension > 0 else 1.0
+                self.model.setScale(scale)
+            
+            # Aktiviere Shader für besseres Rendering
+            self.model.setShaderAuto()
+            
+            # Optimierungen
+            self.model.flattenStrong()  # Optimiere Node-Struktur
+            
+            print(f"Modell erfolgreich geladen und optimiert")
+            return True
+            
+        except Exception as e:
+            print(f"Fehler beim Laden des Modells: {e}")
+            return False
+    
+    def update_task(self, task):
+        """
+        Update-Task - wird jeden Frame aufgerufen
+        Aktualisiert die Rotation des Modells basierend auf Arduino-Daten
+        """
+        if self.model:
+            # Hole aktuelle Rotation vom RotationManager (minimal latency)
+            roll, pitch, yaw = self.rotation_manager.get_rotation()
+            
+            # Setze Rotation (HPR = Heading, Pitch, Roll in Panda3D)
+            # Panda3D verwendet: H=Yaw, P=Pitch, R=Roll
+            self.model.setHpr(yaw, pitch, roll)
+        
+        return task.cont  # Continue task
+    
+    def fps_counter_task(self, task):
+        """Task für FPS-Anzeige"""
+        current_time = time.time()
+        frame_time = current_time - self.last_frame_time
+        self.frame_times.append(frame_time)
+        self.last_frame_time = current_time
+        
+        self.frame_count += 1
+        
+        # Zeige FPS alle 60 Frames
+        if self.frame_count % 60 == 0:
+            if len(self.frame_times) > 0:
+                avg_frame_time = np.mean(self.frame_times)
+                fps = 1.0 / avg_frame_time if avg_frame_time > 0 else 0
+                print(f"FPS: {fps:.1f}")
+        
+        return task.cont
+    
+    def cleanup_and_exit(self):
+        """Räumt auf und beendet die Anwendung"""
+        print("\nBeende Anwendung...")
+        self.userExit()
+
+
+# ==================== HAUPTPROGRAMM ====================
+class EurofighterApp:
+    """Hauptanwendung die alles zusammenführt"""
+    
+    def __init__(self, glb_path, arduino_port=None):
+        self.arduino = ArduinoConnection(port=arduino_port)
+        self.rotation_manager = RotationManager()
+        self.renderer = None
+        self.arduino_thread = None
+        self.running = False
+    
+    def arduino_reader_thread(self):
+        """Thread der kontinuierlich Arduino-Daten liest"""
+        print("Arduino Reader Thread gestartet")
+        
+        while self.running:
+            rotation_data = self.arduino.read_rotation_data()
+            
+            if rotation_data is not None:
+                roll, pitch, yaw = rotation_data
+                self.rotation_manager.update_rotation(roll, pitch, yaw)
+            
+            # Keine künstliche Verzögerung - maximale Reaktionsgeschwindigkeit
+            # time.sleep(0.001)  # Auskommentiert für minimale Latenz
+    
+    def start(self):
+        """Startet die Anwendung"""
+        print("=== Eurofighter 3D Renderer (Panda3D) ===")
+        print("Priorität: 1. Latenz, 2. Smoothness, 3. Rendering")
+        print()
+        
+        # Verbinde mit Arduino
+        if not self.arduino.connect():
+            print("WARNUNG: Kein Arduino verbunden. Verwende Test-Modus.")
+            # Optional: Starte ohne Arduino für Tests
+        
+        # Starte Arduino Reader Thread
+        self.running = True
+        if self.arduino.is_connected:
+            self.arduino_thread = threading.Thread(
+                target=self.arduino_reader_thread,
+                daemon=True
+            )
+            self.arduino_thread.start()
+        
+        print("\nInitialisiere Panda3D Renderer...")
+        
+        # Initialisiere und starte Panda3D Renderer
+        try:
+            self.renderer = EurofighterRenderer(
+                Config.GLB_FILE_PATH,
+                self.rotation_manager,
+                self.arduino
+            )
+            
+            # Starte Panda3D Main Loop (blockiert bis Exit)
+            self.renderer.run()
+            
+        finally:
+            self.cleanup()
+        
+        return True
+    
+    def cleanup(self):
+        """Räumt Ressourcen auf"""
+        print("\nCleanup...")
+        self.running = False
+        
+        if self.arduino_thread:
+            self.arduino_thread.join(timeout=1.0)
+        
+        self.arduino.close()
+        print("Fertig.")
+
+
+# ==================== ENTRY POINT ====================
+if __name__ == "__main__":
+    # Konfiguration
+    GLB_FILE = "eurofighter.glb"  # Pfad zu deiner GLB-Datei
+    ARDUINO_PORT = None  # None für automatische Erkennung, oder z.B. "COM3" / "/dev/ttyUSB0"
+    
+    # Starte Anwendung
+    app = EurofighterApp(GLB_FILE, ARDUINO_PORT)
+    app.start()
+

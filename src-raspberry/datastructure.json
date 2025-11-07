@@ -1,0 +1,29 @@
+{
+    "timestamp": "date;hour.minute.second 24-hour-format",
+    "device_uid": "string",
+    "sensor_data":{
+        "temperature": "float; in Celcius //Sent every second", 
+        "pressure": "float; in Pascal // Sent every second", 
+        "gyro": {
+            "x": "float; in degree",
+            "y": "float; in degree",
+            "z": "float; in degree"
+        },
+        "acceleration": {
+            "x": "float; in m/s",
+            "y": "float; in m/s",
+            "z": "float; in m/s"
+        },
+        "magnetometer": {
+            "x": "float; in T",
+            "y": "float; in T",
+            "z": "float; in T"
+        },
+        "compass": "float, degree 0-360; 0=North"
+    },
+    "metadata": {
+        "battery": "int 0-100 // Sent every second",
+        "uptime": "int in seconds, checked via raspberry pi"
+    }
+    
+}
