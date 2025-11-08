@@ -61,10 +61,15 @@ private:
     void calibrateGyro();
     void calibrateAccel();
     void loadMagCalibration();
-    int CALIBRATION_SAMPLES;
+    static const int CALIBRATION_SAMPLES = 200;
+
+    // Axis alginment
+    static constexpr int ACCEL_REALIGNMENT[3] = {-1, -1, 1};
+    void realignAccel(float& ax, float& ay, float& az);
     
     // Sensor-Messung
     void ahrsMeasure();
+    void debugEulerAngles();
 };
 
 #endif

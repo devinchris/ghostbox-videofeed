@@ -22,7 +22,18 @@
  *
  *  AUTOREN:
  *  ~ Team Ghostbox-Videofeed
- *  ~ D.R., ...
+ *  ~ D.R.
+ * 
+ *  PROBLEME IN UNSERER VERSION:
+ *  - Visualisierung dreht sich auf zwei Achsen bei pitch und roll (Arbeitet mit Quaternionen, kein Gimbal Lock)
+ *    -> Ebenso erkennbar bei der Ausgabe von Euler-Winkeln im Seriellen Monitor
+ *    -> Bei Veränderung von ROLL oder PITCH dreht sich auch YAW mit (obwohl YAW eigentlich stabil bleiben sollte)
+ *  - Magnetometer Kalibrierung könnte besser sein -> Yaw Drift nur gelegentlich
+ * 
+ *  WAS GUT FUNKTIONIERT:
+ *  - Kaum bis gar kein drift bei pitch und roll
+ *  - Schnelle Reaktion auf Bewegungen
+ *  - Accel Werte einwandfrei (auch in der Visualisierung angezeigt)
  */
 
 #include <ReefwingAHRS.h>           // AHRS Bibliothek zum Glätten, abgestimmt auf unseren Arduino. Unterstützt Madgwick und Mahony.
@@ -31,35 +42,7 @@
 #include "SmoothData4D.h"           // GHOSTBOX-eigene Bibliothek um die Werte zu Glätten und Vibration wie Noise zu filtern
 #include "SensorManager.h"
 
-#define CALIBRATION_SAMPLES 200
-
-/* // KALIBRIERUNG
-// Kalibrierungs-Struktur
-typedef struct {
-  float magOffsetX;
-  float magOffsetY;
-  float magOffsetZ;
-  bool isCalibrated;
-} MagCalibration;
-
-float gx_off, gy_off, gz_off;
-float ax_off, ay_off, az_off;
-
-MagCalibration magCal;
-// Flash Speicher wird genutzt für Magnetometer Kalibrierung
-NanoBLEFlashPrefs myFlashPrefs;
-// Sensordaten auslesen & berechnen
-ReefwingAHRS ahrs;
-SensorData data;
-
-// Display und Loop-Frequenz
-int loopFrequency = 0;
-const long displayPeriod = 100;  // 100ms = 10 Hz Display
-unsigned long previousMillis = 0;
- */
-
 // ==========================
-
 // Konstruktor
 SensorManager::SensorManager() {
   loopFrequency = 0;
@@ -102,21 +85,21 @@ void SensorManager::init() {
   // AHRS initialisieren
   ahrs.begin();
 
+  // Anfangs- und Zeitwerte reseten
+  ahrs.reset();
+
   // Fusion-Algorithmus auswählen
-  ahrs.setFusionAlgorithm(SensorFusion::MAHONY);    // TODO: DEBUG beide
-  // ODER: ahrs.setFusionAlgorithm(SensorFusion::MADGWICK);
+  ahrs.setFusionAlgorithm(SensorFusion::MAHONY);    
+  // ahrs.setFusionAlgorithm(SensorFusion::MADGWICK);  // -> Funktioniert schlecht
   
   ahrs.setDeclination(3.5); // Deklination für Deutschland (durchschnittlich)
   
   Serial.println();
   Serial.println("========== AHRS bereit ==========");
   Serial.println("Fusion: MAHONY | Deklination: 3.5°");
-  Serial.println();
-  Serial.println("Roll    |   Pitch   |   Yaw   |   Heading   |   Hz");
-  Serial.println("--------------------------------------------------");
   
   delay(1000);
-  _lastUpdate = micros();
+  // _lastUpdate = micros();
 }
 
 void SensorManager::calibrateGyro() {
@@ -164,7 +147,7 @@ Serial.println("Kalibriere Accelerometer... Stillhalten!");
   Serial.println(az_off, 2);
 }
 
-// DEBUG
+// =============== DEBUG ===============
 void debugMeasurements(Quaternion _Q, float ax, float ay, float az) {
   Serial.println("");
   Serial.print("Q0: "); Serial.print(_Q.q0); Serial.print(" |\t");
@@ -177,6 +160,19 @@ void debugMeasurements(Quaternion _Q, float ax, float ay, float az) {
   Serial.print("aZ: "); Serial.print(az); Serial.print(" |\t");
 }
 
+void SensorManager::debugEulerAngles() {
+  float roll = ahrs.angles.roll;
+  float pitch = ahrs.angles.pitch;
+  float yaw = ahrs.angles.yaw;
+
+  Serial.println("");
+  Serial.print("Roll: "); Serial.print(roll, 2); Serial.print(" |\t");
+  Serial.print("Pitch: "); Serial.print(pitch, 2); Serial.print(" |\t");
+  Serial.print("Yaw: "); Serial.print(yaw, 2); Serial.print(" |\t");
+}
+// END DEBUG
+// =======================================
+
 // ==========================
 // === LIBRARY FUNCTIONS ===
 // ==========================
@@ -186,6 +182,7 @@ void SensorManager::ahrsMeasure(){
   if (IMU.gyroscopeAvailable()) {
     IMU.readGyroscope(data.gx, data.gy, data.gz);
     // Kalibrierungsdaten
+    
     data.gx -= gx_off;
     data.gy -= gy_off;
     data.gz -= gz_off;
@@ -194,6 +191,8 @@ void SensorManager::ahrsMeasure(){
   if (IMU.accelerationAvailable()) {
     IMU.readAcceleration(data.ax, data.ay, data.az);
     // Kalibrierungsdaten einberechnen
+    realignAccel(data.ax, data.ay, data.az);
+
     data.ax -= ax_off;
     data.ay -= ay_off;
     data.az -= az_off;
@@ -210,11 +209,11 @@ void SensorManager::ahrsMeasure(){
     data.mz -= magCal.magOffsetZ;
 
     // Y-Achse invertieren (BMM150 vs BMI270)
-    data.my = -data.my;
+    data.my = -data.my;    
   }
   
   // Übergebe Daten an AHRS und update
-  ahrs.setData(data);
+  ahrs.setData(data, false);    // -> false bedeutet die Library invertiert die Achsen nicht nochmal
   ahrs.update();
 }
 
@@ -237,6 +236,7 @@ void SensorManager::getCalculatedData(Quaternion& _quat, float& ax, float& ay, f
     getAccelValues(ax, ay, az);
     // TODO: SMOOTHING
     // DEBUG: 
+    debugEulerAngles();
     debugMeasurements(_quat, ax, ay, az);
     return;
 }
@@ -246,3 +246,10 @@ void SensorManager::getCalculatedData(Quaternion& _quat, float& ax, float& ay, f
 /* int SensorManager::getLoopFrequency() {
   return loopFrequency;
 } */
+
+// DATENKORREKTUR (Achseninvertierungen, etc)
+void SensorManager::realignAccel(float& ax, float& ay, float& az) {
+  ax = ax * ACCEL_REALIGNMENT[0];
+  ay = ay * ACCEL_REALIGNMENT[1];
+  az = az * ACCEL_REALIGNMENT[2];
+}

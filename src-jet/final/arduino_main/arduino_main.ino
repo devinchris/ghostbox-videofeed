@@ -25,13 +25,15 @@ BLEService myService("19B10000-E8F2-537E-4F6C-D104768A1214");
 SensorManager sensor;
 Quaternion _Quaternion;
 float ax = 0, ay = 0, az = 0;
-SmoothQuaternionData smoothing;  // Korrekter Klassenname
+
+// === SmoothData4D ===
+SmoothQuaternionData smoothing;  
 
 // =====================
 
 // Create BLE Characteristic with READ, WRITE, and NOTIFY
 BLECharacteristic myCharacteristic("19B10001-E8F2-537E-4F6C-D104768A1214",
-                                          BLERead | BLEWrite | BLENotify, sizeof(SensorValues));
+                                   BLERead | BLEWrite | BLENotify, sizeof(SensorValues));
  
 void setup() {
   Serial.begin(9600);
@@ -122,4 +124,23 @@ void loop() {
     Serial.println(central.address());
   }
 }
- 
+/*
+void debugMeasurements(Quaternion _Q, float ax, float ay, float az) {
+  Serial.println("");
+  Serial.print("Q0: "); Serial.print(_Q.q0); Serial.print(" |\t");
+  Serial.print("Q1: "); Serial.print(_Q.q1); Serial.print(" |\t");
+  Serial.print("Q2: "); Serial.print(_Q.q2); Serial.print(" |\t");
+  Serial.print("Q3: "); Serial.print(_Q.q3); Serial.print(" |\t");
+
+  Serial.print("aX: "); Serial.print(ax); Serial.print(" |\t");
+  Serial.print("aY: "); Serial.print(ay); Serial.print(" |\t");
+  Serial.print("aZ: "); Serial.print(az); Serial.print(" |\t");
+}
+
+void debugEulerAngles(float roll, float pitch, float yaw) {
+  Serial.println("");
+  Serial.print("Roll: "); Serial.print(roll); Serial.print(" |\t");
+  Serial.print("Pitch: "); Serial.print(pitch); Serial.print(" |\t");
+  Serial.print("Yaw: "); Serial.print(yaw); Serial.print(" |\t");
+}
+*/
