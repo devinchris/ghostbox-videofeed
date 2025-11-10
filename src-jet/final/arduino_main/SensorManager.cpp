@@ -241,12 +241,6 @@ void SensorManager::getCalculatedData(Quaternion& _quat, float& ax, float& ay, f
     return;
 }
 
-
-
-/* int SensorManager::getLoopFrequency() {
-  return loopFrequency;
-} */
-
 // DATENKORREKTUR (Achseninvertierungen, etc)
 void SensorManager::realignAccel(float& ax, float& ay, float& az) {
   ax = ax * ACCEL_REALIGNMENT[0];
