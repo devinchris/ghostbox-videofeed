@@ -15,9 +15,9 @@ SmoothQuaternionData::SmoothQuaternionData() {
     // TODO: DEBUG Standardwerte
     _isInitialized = false;
     lastSmoothedTime = 0;
-    alpha = 0.6f;
+    alpha = 0.55f;
     targetFrequency = 100.0f;
-    DEADZONE = 0.008f;
+    DEADZONE = 0.001f;
     MOTION_THRESHOLD = 0.5f;
     FAST_ALPHA = 0.75f;
     

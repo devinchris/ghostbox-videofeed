@@ -4,7 +4,7 @@
 #include <ReefwingAHRS.h>
 #include <NanoBLEFlashPrefs.h>
 #include "Arduino_BMI270_BMM150.h"
-//#include "SmoothData4D.h"
+#include "SmoothData4D.h"
 
 // Kalibrierungs-Struktur
 typedef struct {
@@ -14,19 +14,16 @@ typedef struct {
   bool isCalibrated;
 } MagCalibration;
 
-class SensorManager {
+class RotationManager {
 public:
     // Konstruktor
-    SensorManager();
+    RotationManager();
     
     // Initialisierung
     void init(/* int FREQUENCY = 30, int CALIBRATION_SAMPLES = 200 */);
 
     // PRIMARY Getter für alle berechneten Sensordaten
-    void getCalculatedData(Quaternion& quat, float& ax, float& ay, float& az);
-    
-    // Getter für Quaternion
-    // void getRotationQuaternion(float& q0, float& q1, float& q2, float& q3);
+    void getCalculatedData(Quaternion& quat, float& ax, float& ay, float& az, float& mx, float& my, float& mz);
     
     // Getter für Beschleunigung
     void getAccelValues(float& ax, float& ay, float& az);
@@ -45,6 +42,9 @@ private:
     ReefwingAHRS ahrs;
     SensorData data;
     
+    unsigned long currTime;
+    SmoothQuaternionData SmoothData;
+
     // Kalibrierung
     NanoBLEFlashPrefs flashPrefs;
     MagCalibration magCal;
@@ -63,13 +63,47 @@ private:
     void loadMagCalibration();
     static const int CALIBRATION_SAMPLES = 200;
 
+    // Magnetometer Daten
+    float mx_raw, my_raw, mz_raw;
+    int MAG_COUNTER = 0;
+    static const int MAG_SAMPLES_COUNT = 20;
+    // Ziel: 48µT ± 20µT
+    static const int MAG_MIN = 28;
+    static const int MAG_MAX = 68;
+    float mx_last, my_last, mz_last;
+    float mx_avg, my_avg, mz_avg;
+    bool calculateMagnetometerData(float& mx, float& my, float& mz);
+    
+
     // Axis alginment
-    static constexpr int ACCEL_REALIGNMENT[3] = {-1, -1, 1};
+    static constexpr int ACCEL_REALIGNMENT[3] = {1, 1, 1};
+    static constexpr int GYRO_REALIGNMENT[3]  = {1, 1, 1}; 
+    static constexpr int MAG_REALIGNMENT[3]   = {1, -1, -1};
     void realignAccel(float& ax, float& ay, float& az);
+    void realignGyro(float& gx, float& gy, float& gz);
+    void realignMag(float& mx, float& my, float& mz);
+
+    // Magnetische Soft-Iron-Kalibrierung (3x3 Matrix)
+    const float MAG_SOFT_IRON_MATRIX[3][3] = {
+      {0.915, -0.001, -0.05},
+      {0.000,  1.115,  0.006},
+      {0.053,  0.000,  0.996}
+    };
+
+    const float MAG_HARD_IRON_OFFSET[3] = {
+      21.092, -24.715, -62.876              // X, Y, Z Offsets
+    };
     
     // Sensor-Messung
     void ahrsMeasure();
+
+    // DEBUG:
     void debugEulerAngles();
+    void debugRawData();
+    void debugQuaternion(Quaternion _Q);
+    void printAligned(float value);
+    void debugMeasurements(Quaternion _Q, float ax, float ay, float az, float mx, float my, float mz);
+    void diagnoseMagnetometer();  // Diagnose function for magnetometer calibration
 };
 
 #endif

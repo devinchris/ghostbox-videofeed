@@ -14,10 +14,10 @@ typedef struct {
   bool isCalibrated;
 } MagCalibration;
 
-class SensorManager {
+class RotationManager {
 public:
     // Konstruktor
-    SensorManager();
+    RotationManager();
     
     // Initialisierung
     void init(/* int FREQUENCY = 30, int CALIBRATION_SAMPLES = 200 */);

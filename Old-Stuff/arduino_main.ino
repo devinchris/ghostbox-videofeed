@@ -22,7 +22,7 @@ float tempC;
 BLEService myService("19B10000-E8F2-537E-4F6C-D104768A1214");
 
 // === SensorManager ===
-SensorManager sensor;
+RotationManager sensor;
 Quaternion _Quaternion;
 float ax = 0, ay = 0, az = 0;
 SmoothQuaternionData smoothing;  // Korrekter Klassenname

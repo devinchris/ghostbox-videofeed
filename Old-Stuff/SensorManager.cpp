@@ -61,14 +61,14 @@ unsigned long previousMillis = 0;
 // ==========================
 
 // Konstruktor
-SensorManager::SensorManager() {
+RotationManager::RotationManager() {
   loopFrequency = 0;
   previousMillis = 0;
   gx_off = gy_off = gz_off = 0;
   ax_off = ay_off = az_off = 0;
 }
 
-void SensorManager::init() {
+void RotationManager::init() {
 
   Serial.println("=== AHRS Initialisierung ===");
   
@@ -118,7 +118,7 @@ void SensorManager::init() {
   delay(2000);
 }
 
-void SensorManager::calibrateGyro() {
+void RotationManager::calibrateGyro() {
   Serial.println("Kalibriere Gyroskop... Stillhalten!");
 
   float gx_off_calc = 0, gy_off_calc = 0, gz_off_calc = 0;
@@ -140,7 +140,7 @@ void SensorManager::calibrateGyro() {
   Serial.println(gz_off, 2);
 }
 
-void SensorManager::calibrateAccel() {
+void RotationManager::calibrateAccel() {
 Serial.println("Kalibriere Accelerometer... Stillhalten!");
 
   float ax_off_calc = 0, ay_off_calc = 0, az_off_calc = 0;
@@ -164,8 +164,7 @@ Serial.println("Kalibriere Accelerometer... Stillhalten!");
 }
 
 // DEBUG
-void debugMeasurements(Quaternion _Q, float ax, float ay, float az) {
-  Serial.println("");
+void debugMeasurements(Quaternion _Q, float ax, float ay, float az, float mx, float my, float mz) {
   Serial.print("Q0: "); Serial.print(_Q.q0); Serial.print(" |\t");
   Serial.print("Q1: "); Serial.print(_Q.q1); Serial.print(" |\t");
   Serial.print("Q2: "); Serial.print(_Q.q2); Serial.print(" |\t");
@@ -180,7 +179,7 @@ void debugMeasurements(Quaternion _Q, float ax, float ay, float az) {
 // === LIBRARY FUNCTIONS ===
 // ==========================
 
-void SensorManager::ahrsMeasure(){
+void RotationManager::ahrsMeasure(){
   // Lese Sensordaten
   if (IMU.gyroscopeAvailable()) {
     IMU.readGyroscope(data.gx, data.gy, data.gz);
@@ -217,19 +216,19 @@ void SensorManager::ahrsMeasure(){
   ahrs.update();
 }
 
-void SensorManager::getAccelValues(float& ax, float& ay, float& az){
+void RotationManager::getAccelValues(float& ax, float& ay, float& az){
   ax = data.ax;
   ay = data.ay;
   az = data.az;
   return;
 }
 
-void SensorManager::getTemperature(float& celsius){
+void RotationManager::getTemperature(float& celsius){
   // TODO: Implementieren
   celsius = 67; // DEBUG
 }
 
-void SensorManager::getCalculatedData(Quaternion& _quat, float& ax, float& ay, float& az){
+void RotationManager::getCalculatedData(Quaternion& _quat, float& ax, float& ay, float& az){
     // MAIN Function um die Sensordaten zu erhalten
     ahrsMeasure();
     _quat = ahrs.getQuaternion();

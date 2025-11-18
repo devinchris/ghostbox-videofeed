@@ -7,7 +7,7 @@ class SmoothQuaternionData {
     public:
         SmoothQuaternionData(); // Konstruktor
         void smoothQuaternions(Quaternion& _Quat, unsigned long currentTime);
-        void initSmoothing(float targetFrequency, float alpha=0.47f);
+        void initSmoothing(float targetFrequency, float alpha=0.55f);
 
     private:
         unsigned long lastSmoothedTime;
