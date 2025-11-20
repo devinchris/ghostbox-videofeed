@@ -23,7 +23,7 @@ public:
     void init(const float SAMPLE_FREQ = 25.0f);
 
     // PRIMARY Getter für alle berechneten Sensordaten
-    void getCalculatedData(Quaternion& quat, float& ax, float& ay, float& az, float& mx, float& my, float& mz);
+    void getCalculatedData(Quaternion& quat, float& ax, float& ay, float& az, float& mx, float& my, float& mz, float& gyroMag);
     
     // Getter für Beschleunigung
     void getAccelValues(float& ax, float& ay, float& az);
@@ -69,7 +69,7 @@ private:
     static const int MAG_SAMPLES_COUNT = 1;    // Berücksichtige Magnetometer Werte jedes n-te sample
     // Ziel: 48µT in Deutschland
     static const int MAG_MIN = 28;
-    static const int MAG_MAX = 78;
+    static const int MAG_MAX = 68;
     float mx_last, my_last, mz_last;
     float mx_avg, my_avg, mz_avg;
     bool magValid;
@@ -95,15 +95,30 @@ private:
     void realignMag(float& mx, float& my, float& mz);
 
     // Magnetische Soft-Iron-Kalibrierung (3x3 Matrix)
+    // Raum Pascal
     const float MAG_SOFT_IRON_MATRIX[3][3] = {
-      {0.915, -0.001, -0.05},
-      {0.000,  1.115,  0.006},
-      {0.053,  0.000,  0.996}
+      {1.098, -0.014, -0.016},
+      {-0.01,  1.010,  0.002},
+      {0.016,  0.002,  1.108}   // 0, 0, 0.108 (!!!)
+                                // Versehentlich wurde der letzte Wert auf 0.108 statt 1.108 gesetzt
+                                // Ergebnis: Es lief besser (!) als zuvor...
+    }; 
+    const float MAG_HARD_IRON_OFFSET[3] = {
+      16.772, -18.925, -45.458           // X, Y, Z Offsets
+    };
+
+    // Lounge
+    /*
+    const float MAG_SOFT_IRON_MATRIX[3][3] = {
+      {1.109, -0.017, -0.012},
+      {-0.01,  1.099,  0.001},
+      {0.012,  0.001,  1.124} 
     };
 
     const float MAG_HARD_IRON_OFFSET[3] = {
-      21.092, -24.715, -62.876              // X, Y, Z Offsets
+      30.506, -32.011, -44.653           // X, Y, Z Offsets
     };
+    */
     
     // Sensor-Messung
     void ahrsMeasure();

@@ -2,9 +2,27 @@
 #include "RotationManager.h"
 #include "SmoothData4D.h"
 
-#define FREQUENCY 25.0f // Hz
+#define FREQUENCY 25.0f // Hz       Frequenz mit der Sensrodaten gemessen/gesendet werden
+#define MAG_FREQUENCY 19.0f // Hz   Frequenz für Magnetometer Kalibrierung
+
+#define CMD_RUNNING 0x00          // Jet bewegt sich und sendet Daten
+#define CMD_IDLE 0x01             // Jet geht in den IDLE Mode
+#define CMD_PLATFORM_DETECTED 0x02  // Jet war im IDLE und hat detected, dass er auf der Plattform steht
+#define CMD_CALIBRATE_MAG 0x03    // Jet geht in den Kalibrierungsmodus
+uint8_t cmd;
+
+enum State {
+  RUNNING,
+  CALIBRATING,
+  DISCONNECTED,
+  IDLE,
+  PLATFORM
+};
+
+State currentState = DISCONNECTED;
 
 // Single Sensor Sample (32 Bytes)
+// Sendet alle Sensordaten in einem struct via BLE
 struct SensorValues {
   uint32_t timestamp_ms;        // in ms
   float accelX, accelY, accelZ; // in m/s
@@ -12,16 +30,23 @@ struct SensorValues {
   float magX, magY, magZ;       // in Tesla    
   float tempC;                  // in Celsius
 } __attribute__((packed));      // Verhindert Padding
- 
+
+// Sendet nur Magnetometer Daten für Kalibrierung
+struct MagnoValues {
+  float mx, my, mz;             // in Tesla    
+} __attribute__((packed));      // Verhindert Padding
+
+// === Globals === 
 SensorValues sensorData;
+MagnoValues magValues;
 unsigned long lastSendTime;
 float tempC;
+int idlecount = 0;
+static const int idleCountMax = 100;
+bool idle = false;
  
-// Create BLE Service
-// Raspberry:
+// BLE Service erstellen
 BLEService myService("19B10000-E8F2-537E-4F6C-D104768A1214");
-// Mac:
-// BLEService myService("19B10000-E8F2-537E-4F6C-D104768A1267");
 
 
 // === SensorManager ===
@@ -33,11 +58,19 @@ float mx = 0, my = 0, mz = 0;
 // === SmoothData4D ===
 SmoothQuaternionData smoothing;  
 
-// =====================
 
-// Create BLE Characteristic with READ, WRITE, and NOTIFY
-BLECharacteristic myCharacteristic("19B10001-E8F2-537E-4F6C-D104768A1214",
+// === BLE Characteristics ===
+                                  // Sensorwerte 
+BLECharacteristic dataCharacteristic("19B10001-E8F2-537E-4F6C-D104768A1214",
                                    BLERead | BLEWrite | BLENotify, sizeof(SensorValues));
+
+                                   // Magnetometer Werte
+BLECharacteristic magCharacteristic("19B10002-E8F2-537E-4F6C-D104768A1214",
+                                   BLERead | BLENotify, sizeof(MagnoValues));
+
+                                   // Commands (Idle, Platform, Kalibrierung)
+BLECharacteristic controlCharacteristic("19B10003-E8F2-537E-4F6C-D104768A1214",
+                                   BLERead | BLEWrite | BLENotify, 1); // Steuerungs-Charakteristik
  
 void setup() {
   Serial.begin(115200);
@@ -52,19 +85,20 @@ void setup() {
   BLE.setConnectionInterval(6, 6);
   BLE.setAdvertisingInterval(160);
   // Set advertised local name and service
-  BLE.setLocalName("Nano");
-  BLE.setDeviceName("Nano");
+  BLE.setLocalName("Eurofighter");
+  BLE.setDeviceName("Eurofighter");
  
   BLE.setAdvertisedService(myService);
  
   // Add characteristic to service
-  myService.addCharacteristic(myCharacteristic);
+  myService.addCharacteristic(dataCharacteristic);
+  myService.addCharacteristic(magCharacteristic);
  
   // Add service
   BLE.addService(myService);
  
   // Set initial value
-  myCharacteristic.writeValue("Ready");
+  dataCharacteristic.writeValue("Ready");
  
   // Start advertising
   BLE.advertise();
@@ -80,73 +114,112 @@ void setup() {
 }
  
 void loop() {
-  // Listen for BLE centrals to connect
+  // Central (Raspberry) verbindet sich dann mit dem Nano
   BLEDevice central = BLE.central();
- 
-  if (central) {
-    Serial.print("Connected to central: ");
-    Serial.println(central.address());
-   
-    int counter = 0;
-   
-    // While the central is connected
-    while (central.connected()) {
-      if(millis() - lastSendTime >= 1000 / FREQUENCY) {
-        /* Serial.println(millis() - lastSendTime); */
-        lastSendTime = millis();
-        
-        // Hole Sensordaten vom SensorManager
-        sensor.getCalculatedData(_Quaternion, ax, ay, az, mx, my, mz);
-        sensor.getTemperature(tempC);
-        
-        // Das Quaternion wird direkt modifiziert (Pass-by-Reference)
-        // smoothing.smoothQuaternions(_Quaternion, millis());
-    
-        sensorData.timestamp_ms = millis();
-        sensorData.accelX = ax;
-        sensorData.accelY = ay;
-        sensorData.accelZ = az;
-        sensorData.q0 = _Quaternion.q0;  // Geglättete Werte!
-        sensorData.q1 = _Quaternion.q1;
-        sensorData.q2 = _Quaternion.q2;
-        sensorData.q3 = _Quaternion.q3; 
-        sensorData.magX = mx;
-        sensorData.magY = my;
-        sensorData.magZ = mz;
-        sensorData.tempC = tempC;
-      
-        /* Serial.print("QUAT: "); 
-        Serial.print(" q0: "); Serial.print(_Quaternion.q0); Serial.print(" |\t");
-        Serial.print("q1: "); Serial.print(_Quaternion.q1); Serial.print(" |\t");
-        Serial.print("q2: "); Serial.print(_Quaternion.q2); Serial.print(" |\t");
-        Serial.print("q3: "); Serial.print(_Quaternion.q3); Serial.println(" |\t"); */
 
-        myCharacteristic.writeValue((byte*)&sensorData, sizeof(sensorData));
+  BLE.poll();
+
+  switch(currentState) {
+    // ==== RECONNECTING STATE ====
+    case DISCONNECTED:
+      if (central && central.connected()) {
+        if(Serial) Serial.print("Connected to central: ");
+        if(Serial) Serial.println(central.address());
+        currentState = RUNNING;
+        lastSendTime = millis();
       }
-     
-    }
-   
-    Serial.print("Disconnected from central: ");
-    Serial.println(central.address());
+      break;
+    
+    // ==== MAGNETOMETER KALIBRIERUNG ====
+    case CALIBRATING:
+      if(!(millis() - lastSendTime >= 1000 / MAG_FREQUENCY)) {
+        break;
+      }
+      if(central.connected() == false) {
+        break;
+      }
+      if(!IMU.magneticFieldAvailable()) {
+        break;
+      }
+      lastSendTime = millis();
+      IMU.readMagneticField(mx, my, mz);
+      magValues = {mx, my, mz};
+      // Sende nur Magnetometer Daten
+      magCharacteristic.writeValue((byte*)&magValues, sizeof(float)*3);
+      
+      break;
+
+    // =====================
+    // ===== MAIN LOOP =====
+    // =====================
+    case RUNNING:
+      if(central.connected() == false) {
+        if(Serial) Serial.print("Disconnected from central: ");
+        if(Serial) Serial.println(central.address());
+        currentState = DISCONNECTED;
+        break;
+      }
+      if(!(millis() - lastSendTime >= 1000 / FREQUENCY)) {
+        break;
+      }
+      float gyroMag;
+      lastSendTime = millis();
+      sensor.getCalculatedData(_Quaternion, ax, ay, az, mx, my, mz, gyroMag);
+      sensor.getTemperature(tempC);
+
+      //smoothing.smooth(_Quaternion);
+
+      // SensorData Struct mit aktuellen Werten füllen
+      sensorData.timestamp_ms = millis();
+      sensorData.accelX = ax;
+      sensorData.accelY = ay;
+      sensorData.accelZ = az;
+      sensorData.q0 = _Quaternion.q0;
+      sensorData.q1 = _Quaternion.q1;
+      sensorData.q2 = _Quaternion.q2;
+      sensorData.q3 = _Quaternion.q3;
+      sensorData.magX = mx;
+      sensorData.magY = my;
+      sensorData.magZ = mz;
+      sensorData.tempC = tempC;
+      
+      dataCharacteristic.writeValue((byte*)&sensorData, sizeof(sensorData));
+
+      // IDLE Detection
+      float accelMag = sqrt(ax*ax + ay*ay + (az-1)*(az-1));
+      if(accelMag < 0.03f && gyroMag < 10.0f) {
+        idlecount++;
+        if(idlecount > idleCountMax){
+          // Go IDLE
+          currentState = IDLE;
+        }
+      }
+      break;
+
+    case IDLE:
+      if(!idle){ 
+        controlCharacteristic.writeValue(&CMD_IDLE, 1);
+        idle = true;
+      }
+
+      sensor.getCalculatedData(_Quaternion, ax, ay, az, mx, my, mz, gyroMag);
+      float accelMag = sqrt(ax*ax + ay*ay + az*az);
+      float magnetMag = sqrt(mx*mx + my*my + mz*mz);
+
+      if((accelMag - 1) > 0 || gyroMag > 10.0f){
+        // Bewegung erkannt -> gehe zu state RUNNING
+        controlCharacteristic.writeValue(&CMD_RUNNING, 1);
+        idle = false;
+        currentState = RUNNING;
+      }
+
+      if((magnetMag - 48) > 25){
+        // Elektromagnet auf der Platform erkannt -> gehe zu state PLATFORM
+        controlCharacteristic.writeValue(&CMD_PLATFORM_DETECTED, 1);
+        currentState = PLATFORM;
+      }
+
+      break;
+
   }
 }
-/*
-void debugMeasurements(Quaternion _Q, float ax, float ay, float az) {
-  Serial.println("");
-  Serial.print("Q0: "); Serial.print(_Q.q0); Serial.print(" |\t");
-  Serial.print("Q1: "); Serial.print(_Q.q1); Serial.print(" |\t");
-  Serial.print("Q2: "); Serial.print(_Q.q2); Serial.print(" |\t");
-  Serial.print("Q3: "); Serial.print(_Q.q3); Serial.print(" |\t");
-
-  Serial.print("aX: "); Serial.print(ax); Serial.print(" |\t");
-  Serial.print("aY: "); Serial.print(ay); Serial.print(" |\t");
-  Serial.print("aZ: "); Serial.print(az); Serial.print(" |\t");
-}
-
-void debugEulerAngles(float roll, float pitch, float yaw) {
-  Serial.println("");
-  Serial.print("Roll: "); Serial.print(roll); Serial.print(" |\t");
-  Serial.print("Pitch: "); Serial.print(pitch); Serial.print(" |\t");
-  Serial.print("Yaw: "); Serial.print(yaw); Serial.print(" |\t");
-}
-*/

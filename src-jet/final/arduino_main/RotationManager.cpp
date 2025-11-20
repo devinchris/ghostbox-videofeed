@@ -15,7 +15,7 @@
  *  - Luftdruck        (bar)
  *
  *  DEPENDENCIES:
- *  - ReefwingAHRS    | AHRS Library zum berechnen der Rotation anhand 9-Achsen Sensoren, verwendet Mahony oder Madgwick
+ *  - MadgwickAHRS    | AHRS Library zum berechnen der Rotation anhand 9-Achsen Sensoren, verwendet Mahony oder Madgwick
  *  - FlashPrefs      | Auslesen des internen Flash Speichers (verwendet für Kalibrierung vom Magnetometer)
  *  - BMI270_BMM150   | Auslesen der Sensordaten in Echtzeit der eingebauten BOSCH Sensoren des Arduino Nano
  *  - SmoothData4D    | GHOSTBOX Library für Deadzone, Filter für Vibration & Noise und Glättung
@@ -281,7 +281,7 @@ void RotationManager::getTemperature(float& celsius){
 // =======================================
 // ==== MAIN Function für Sensordaten ====
 // =======================================
-void RotationManager::getCalculatedData(Quaternion& _quat, float& ax, float& ay, float& az, float& mx, float& my, float& mz){
+void RotationManager::getCalculatedData(Quaternion& _quat, float& ax, float& ay, float& az, float& mx, float& my, float& mz, float& gyroMag){
     currTime = millis();
     ahrsMeasure();
     // Quaternion aus Madgwick Filter übernehmen 
@@ -298,6 +298,8 @@ void RotationManager::getCalculatedData(Quaternion& _quat, float& ax, float& ay,
     mx = data.mx;
     my = data.my;
     mz = data.mz;
+
+    gyroMag = sqrt(data.gx*data.gx + data.gy*data.gy + data.gz*data.gz);
 
     //DEBUG:
     /* Serial.print("GYRO_MAG: ");

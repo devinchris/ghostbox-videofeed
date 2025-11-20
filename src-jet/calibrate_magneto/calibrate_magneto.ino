@@ -8,8 +8,6 @@ unsigned long lastSample = 0;
 const unsigned long sampleInterval = 50; // 20 Hz (50ms)
 
 void setup() {
-  Serial.begin(115200);
-  while (!Serial);
 
   if (!IMU.begin()) {
     Serial.println("IMU init failed!");
@@ -34,9 +32,9 @@ void setup() {
 void loop() {
   BLEDevice central = BLE.central();
 
-  if (central) {
+  if (central) {/* 
     Serial.print("Connected to: ");
-    Serial.println(central.address());
+    Serial.println(central.address()); */
 
     while (central.connected()) {
       unsigned long now = millis();
