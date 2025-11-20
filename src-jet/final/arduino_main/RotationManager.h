@@ -37,6 +37,13 @@ public:
     // Loop-Frequenz abrufen
     int getLoopFrequency();
 
+    // Magnetometer Modus kann via Knopf auf der Drehplatte geswitcht werden
+    enum class MagMode {
+      STANDARD,           // Standard Werte die von uns kalibriert wurden
+      INDIVIDUAL,         // Individuelle Werte (erfordert Kalibrierung vor Ort)
+      IMU                 // 6-Achsen Sensor, dumped den Magno (bei stark gestörtem Magnetfeld)
+    };
+
 private:
   // AHRS-Objekte
   Madgwick filter;
@@ -77,11 +84,12 @@ private:
     void calcMagEverytime(float& mx, float& my, float& mz);
 
     // Dynamische Gain Anpassung
+    // Der Gain bestimmt, wie sehr der Filter dem Gyro oder dem Accel vertraut
     void adaptiveFilterGain(float ax, float ay, float az, float gx, float gy, float gz);
     static constexpr float ACCEL_MAG_MIN = 0.75f; // g
     static constexpr float ACCEL_MAG_MAX = 1.25f; // g
-    static constexpr float BETA_MIN = 0.01f;      // TODO:
-    static constexpr float BETA_MAX = 0.3f;       // DEBUG & test
+    static constexpr float BETA_MIN = 0.01f;      
+    static constexpr float BETA_MAX = 0.3f;       
     static constexpr float BETA_NORM_LOW = 0.05f;
     static constexpr float BETA_NORM_HIGH = 0.1f;
 

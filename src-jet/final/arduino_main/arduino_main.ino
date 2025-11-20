@@ -2,14 +2,15 @@
 #include "RotationManager.h"
 #include "SmoothData4D.h"
 
-#define FREQUENCY 25.0f // Hz       Frequenz mit der Sensrodaten gemessen/gesendet werden
+#define FREQUENCY 25.0f     // Hz   Frequenz mit der Sensrodaten gemessen/gesendet werden
 #define MAG_FREQUENCY 19.0f // Hz   Frequenz für Magnetometer Kalibrierung
 
-#define CMD_RUNNING 0x00          // Jet bewegt sich und sendet Daten
-#define CMD_IDLE 0x01             // Jet geht in den IDLE Mode
+#define CMD_RUNNING 0x00            // Jet bewegt sich und sendet Daten
+#define CMD_IDLE 0x01               // Jet geht in den IDLE Mode
 #define CMD_PLATFORM_DETECTED 0x02  // Jet war im IDLE und hat detected, dass er auf der Plattform steht
-#define CMD_CALIBRATE_MAG 0x03    // Jet geht in den Kalibrierungsmodus
-uint8_t cmd;
+#define CMD_CALIBRATE_MAG 0x03      // Jet geht in den Kalibrierungsmodus
+
+#define INFO_MAGNETMODE 0x05        // Info: Magnetometer Modus (um auf dem LCD anzuzeigen)
 
 enum State {
   RUNNING,
@@ -49,7 +50,7 @@ bool idle = false;
 BLEService myService("19B10000-E8F2-537E-4F6C-D104768A1214");
 
 
-// === SensorManager ===
+// === RotationManager ===
 RotationManager sensor;
 Quaternion _Quaternion;
 float ax = 0, ay = 0, az = 0;
@@ -136,6 +137,7 @@ void loop() {
         break;
       }
       if(central.connected() == false) {
+        currentState = DISCONNECTED;
         break;
       }
       if(!IMU.magneticFieldAvailable()) {
@@ -151,7 +153,7 @@ void loop() {
 
     // =====================
     // ===== MAIN LOOP =====
-    // =====================
+    // ===================== 
     case RUNNING:
       if(central.connected() == false) {
         if(Serial) Serial.print("Disconnected from central: ");
@@ -198,6 +200,7 @@ void loop() {
 
     case IDLE:
       if(!idle){ 
+        // Sendet eine IDLE Nachricht falls noch nicht geschehen
         controlCharacteristic.writeValue(&CMD_IDLE, 1);
         idle = true;
       }
@@ -206,19 +209,33 @@ void loop() {
       float accelMag = sqrt(ax*ax + ay*ay + az*az);
       float magnetMag = sqrt(mx*mx + my*my + mz*mz);
 
+      // Aufnahme Detection
+      if((accelMag - 1) > 0 || gyroMag > 10.0f){
+        // Bewegung erkannt -> gehe zu state RUNNING
+        controlCharacteristic.writeValue(&CMD_RUNNING, 1);
+        idle = false;
+        currentState = RUNNING;
+        break;
+      }
+
+      if((magnetMag - 48) > 25 || (magnetMag - 48) < -25){
+        // Elektromagnet auf der Platform erkannt -> gehe zu state PLATFORM
+        controlCharacteristic.writeValue(&CMD_PLATFORM_DETECTED, 1);
+        currentState = PLATFORM;
+      }
+      break;
+
+    case PLATFORM:
+      sensor.getCalculatedData(_Quaternion, ax, ay, az, mx, my, mz, gyroMag);
+      accelMag = sqrt(ax*ax + ay*ay + az*az);
+
+      // Aufnahme Detection
       if((accelMag - 1) > 0 || gyroMag > 10.0f){
         // Bewegung erkannt -> gehe zu state RUNNING
         controlCharacteristic.writeValue(&CMD_RUNNING, 1);
         idle = false;
         currentState = RUNNING;
       }
-
-      if((magnetMag - 48) > 25){
-        // Elektromagnet auf der Platform erkannt -> gehe zu state PLATFORM
-        controlCharacteristic.writeValue(&CMD_PLATFORM_DETECTED, 1);
-        currentState = PLATFORM;
-      }
-
       break;
 
   }
