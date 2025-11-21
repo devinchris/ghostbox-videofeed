@@ -17,7 +17,7 @@ SmoothQuaternionData::SmoothQuaternionData() {
     lastSmoothedTime = 0;
     alpha = 0.6f;
     targetFrequency = 100.0f;
-    DEADZONE = 0.008f;
+    DEADZONE = 0.003f;
     MOTION_THRESHOLD = 0.5f;
     FAST_ALPHA = 0.75f;
     
@@ -58,7 +58,7 @@ void SmoothQuaternionData::normalizeQuaternion(float q[4]) {
     arm_scale_f32(q, invMagnitude, q, 4);
 }
 
-void SmoothQuaternionData::smoothQuaternions(Quaternion& _Quat, unsigned long currentTime) {
+void SmoothQuaternionData::smoothQuaternion(Quaternion& _Quat, unsigned long currentTime) {
     // Konvertiere Quaternion zu Array für ARM-optimierte Operationen
     float q[4] = {_Quat.q0, _Quat.q1, _Quat.q2, _Quat.q3};
     

@@ -6,38 +6,36 @@
  *  Berechnet aktuelle Rotationslage durch AHRS Funktionen 
  *
  *  RETURNS:
- *  - Rotation im Raum (Quaternion) - geglättet, kalkuliert
+ *  - Timestamp        (millis) -> durch arduino_main.ino
+ *  - Rotation im Raum (Quaternion) - kalkuliert
  *  - Beschleunigung   (a)          - 3 Achsen
+ *  - Magnetometer     (T)          - 3 Achsen
  *  // TODO:
  *  - Temperatur       (°C)
- *  - Timestamp        (millis)
- *  - Magnetometer     (T)          - 3 Achsen
  *  - Luftdruck        (bar)
  *
  *  DEPENDENCIES:
  *  - MadgwickAHRS    | AHRS Library zum berechnen der Rotation anhand 9-Achsen Sensoren, verwendet Mahony oder Madgwick
  *  - FlashPrefs      | Auslesen des internen Flash Speichers (verwendet für Kalibrierung vom Magnetometer)
  *  - BMI270_BMM150   | Auslesen der Sensordaten in Echtzeit der eingebauten BOSCH Sensoren des Arduino Nano
- *  - SmoothData4D    | GHOSTBOX Library für Deadzone, Filter für Vibration & Noise und Glättung
  *
  *  AUTOREN:
  *  ~ Team Ghostbox-Videofeed
  *  ~ D.R.
  * 
  *  PROBLEME IN UNSERER VERSION:
- *  - YAW Drift über Zeit und bei schnellen Bewegungen
- *    -> Magnetometer korrigiert zu wenig
- *  - ROLL & PITCH Drift bei Rotation
+ *  - YAW Drift über Zeit möglich (bekanntes Problem bei Magnetometern in Innenräumen)
  * 
  *  WAS GUT FUNKTIONIERT:
  *  - Schnelle Reaktion auf Bewegungen
- *  - Accel Werte einwandfrei (auch in der Visualisierung angezeigt)
+ *  - Accel Werte einwandfrei
+ *  - Stabilität durch Glättung
+ *  - Adaptive Gain Anpassung funktioniert gut
  */
 
 #include <MadgwickAHRS.h>           // AHRS Bibliothek zum Glätten auf Basis des Madgwick-Algorithmus.
 #include <NanoBLEFlashPrefs.h>      // Bibliothek um den Nano Flash Speicher auszulesen. Verwenden wir für Magnetometer Kalibrierung.
 #include "Arduino_BMI270_BMM150.h"  // Bibliothek für den BMI270 Beschleunigungssensor und BMM150 Magnetometer
-#include "SmoothData4D.h"           // GHOSTBOX-eigene Bibliothek um die Werte zu Glätten und Vibration wie Noise zu filtern
 #include "RotationManager.h"
 
 // ==========================
@@ -287,8 +285,6 @@ void RotationManager::getCalculatedData(Quaternion& _quat, float& ax, float& ay,
     // Quaternion aus Madgwick Filter übernehmen 
     _quat = Quaternion(filter.q0, filter.q1, filter.q2, filter.q3);
 
-    //SmoothData.smoothQuaternions(_quat, currTime);
-
     // ACCEL:
     ax = data.ax;
     ay = data.ay;
@@ -404,51 +400,6 @@ void RotationManager::adaptiveFilterGain(float ax, float ay, float az, float gx,
 
 }
 
-/* void SensorManager::calcMagEverytime(float& mx, float& my, float& mz) {
-  if (IMU.magneticFieldAvailable()) {
-    IMU.readMagneticField(mx_raw, my_raw, mz_raw);
-    
-    // 1. Hard Iron Correction
-    // Offsets Berechnet mit Magneto 1.2
-    float mx_hard = mx_raw - MAG_HARD_IRON_OFFSET[0];
-    float my_hard = my_raw - MAG_HARD_IRON_OFFSET[1];
-    float mz_hard = mz_raw - MAG_HARD_IRON_OFFSET[2];
-    
-    // 2. Soft Iron Correction
-    // 3x3 Matrix berechnet mit Magneto 1.2
-    float mx_soft = MAG_SOFT_IRON_MATRIX[0][0] * mx_hard +
-                    MAG_SOFT_IRON_MATRIX[0][1] * my_hard +
-                    MAG_SOFT_IRON_MATRIX[0][2] * mz_hard;
-    
-    float my_soft = MAG_SOFT_IRON_MATRIX[1][0] * mx_hard +
-                    MAG_SOFT_IRON_MATRIX[1][1] * my_hard +
-                    MAG_SOFT_IRON_MATRIX[1][2] * mz_hard;
-    
-    float mz_soft = MAG_SOFT_IRON_MATRIX[2][0] * mx_hard +
-                    MAG_SOFT_IRON_MATRIX[2][1] * my_hard +
-                    MAG_SOFT_IRON_MATRIX[2][2] * mz_hard;
-    
-    float mag_magnitude = sqrt(mx_soft*mx_soft + my_soft*my_soft + mz_soft*mz_soft);
-
-    if(mag_magnitude < MAG_MIN || mag_magnitude > MAG_MAX){
-      Serial.println("");
-      Serial.print("Magnetometer Messwert ungültig: MAG:  ");
-      Serial.println(mag_magnitude);
-      data.mx = 0; data.my = 0; data.mz = 0;
-      magValid = false;
-      return;
-    }
-    data.mx = mx_soft;
-    data.my = my_soft;
-    data.mz = mz_soft;
-    magValid = true;
-  } else {
-    mx = 0;
-    my = 0;
-    mz = 0;
-    magValid = false;
-  }
-} */
 
 // DATENKORREKTUR (Achseninvertierungen etc)
 void RotationManager::realignAccel(float& ax, float& ay, float& az) {

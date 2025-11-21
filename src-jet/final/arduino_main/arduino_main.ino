@@ -1,23 +1,34 @@
-#include <ArduinoBLE.h>
-#include "RotationManager.h"
-#include "SmoothData4D.h"
+#include <ArduinoBLE.h>         // Library für BLE Kommunikation
+
+#include "RotationManager.h"    // GHOSTBOX-Library
+// -> liest Sensordaten von IMU und Magno 
+// -> Kalibriert Sensoren anfänglich
+// -> berechnet Rotation via Madgwick AHRS
+// -> Gibt berechnete Quaternion, Accel und Magno Werte zurück
+
+#include "SmoothData4D.h"       // GHOSTBOX-Library
+// -> Glättet Quaternionen Werte
+// -> Filtert Vibrationen & Noise
+// -> Optimiert für ARM FPU
+// -> Deadzone um kleine Bewegungen zu ignorieren
 
 #define FREQUENCY 25.0f     // Hz   Frequenz mit der Sensrodaten gemessen/gesendet werden
 #define MAG_FREQUENCY 19.0f // Hz   Frequenz für Magnetometer Kalibrierung
 
-#define CMD_RUNNING 0x00            // Jet bewegt sich und sendet Daten
-#define CMD_IDLE 0x01               // Jet geht in den IDLE Mode
-#define CMD_PLATFORM_DETECTED 0x02  // Jet war im IDLE und hat detected, dass er auf der Plattform steht
-#define CMD_CALIBRATE_MAG 0x03      // Jet geht in den Kalibrierungsmodus
+// BLE Command Bytes -> Jeder Byte ist ein Befehl von Jet -> Raspberry und andersrum
+const uint8_t CMD_RUNNING = 0x00;            // Jet bewegt sich und sendet Daten
+const uint8_t CMD_IDLE = 0x01;               // Jet ist im IDLE Mode und sendet nichts
+const uint8_t CMD_PLATFORM_DETECTED = 0x02;  // Jet war im IDLE und hat detected, dass er auf der Plattform steht
+const uint8_t CMD_CALIBRATE_MAG = 0x03;      // Jet kalibriert sein Magnetometer (-> Figure 8 Bewegung!)
 
-#define INFO_MAGNETMODE 0x05        // Info: Magnetometer Modus (um auf dem LCD anzuzeigen)
+const uint8_t INFO_MAGNETMODE = 0x05;        // Info: AHRS Modus (um auf dem LCD anzuzeigen)
 
 enum State {
-  RUNNING,
-  CALIBRATING,
-  DISCONNECTED,
-  IDLE,
-  PLATFORM
+  RUNNING,        // Main Loop - sendet Sensordaten
+  CALIBRATING,    // Magnetometer Kalibrierung läuft
+  DISCONNECTED,   // Keine BLE Verbindung
+  IDLE,           // Jet ist im Leerlauf
+  PLATFORM        // Jet steht auf der Plattform
 };
 
 State currentState = DISCONNECTED;
@@ -28,13 +39,13 @@ struct SensorValues {
   uint32_t timestamp_ms;        // in ms
   float accelX, accelY, accelZ; // in m/s
   float q0, q1, q2, q3;         // in Grad
-  float magX, magY, magZ;       // in Tesla    
+  float magX, magY, magZ;       // in µTesla    
   float tempC;                  // in Celsius
 } __attribute__((packed));      // Verhindert Padding
 
 // Sendet nur Magnetometer Daten für Kalibrierung
 struct MagnoValues {
-  float mx, my, mz;             // in Tesla    
+  float mx, my, mz;             // in µTesla    
 } __attribute__((packed));      // Verhindert Padding
 
 // === Globals === 
@@ -45,6 +56,9 @@ float tempC;
 int idlecount = 0;
 static const int idleCountMax = 100;
 bool idle = false;
+float accelMag = 0.0f;
+float magnetMag = 0.0f;
+float gyroMag = 0.0f;
  
 // BLE Service erstellen
 BLEService myService("19B10000-E8F2-537E-4F6C-D104768A1214");
@@ -75,7 +89,6 @@ BLECharacteristic controlCharacteristic("19B10003-E8F2-537E-4F6C-D104768A1214",
  
 void setup() {
   Serial.begin(115200);
-  // while (!Serial);
  
   // Initialize BLE
   if (!BLE.begin()) {
@@ -85,7 +98,7 @@ void setup() {
  
   BLE.setConnectionInterval(6, 6);
   BLE.setAdvertisingInterval(160);
-  // Set advertised local name and service
+  // Suche findet via BLE Namen statt
   BLE.setLocalName("Eurofighter");
   BLE.setDeviceName("Eurofighter");
  
@@ -94,6 +107,7 @@ void setup() {
   // Add characteristic to service
   myService.addCharacteristic(dataCharacteristic);
   myService.addCharacteristic(magCharacteristic);
+  myService.addCharacteristic(controlCharacteristic);
  
   // Add service
   BLE.addService(myService);
@@ -101,7 +115,7 @@ void setup() {
   // Set initial value
   dataCharacteristic.writeValue("Ready");
  
-  // Start advertising
+  // Starte advertising
   BLE.advertise();
  
   Serial.println("Bluetooth device active, waiting for connections...");
@@ -111,15 +125,24 @@ void setup() {
   // Initialisiere Smoothing mit Target-Frequenz und Alpha-Wert
   // Target-Frequenz sollte der Sensor-Update-Rate entsprechen (z.B. 100 Hz)
   // Alpha: 0.55 = mittlere Glättung (0.01 = sehr stark, 0.99 = fast keine Glättung)
-  smoothing.initSmoothing(FREQUENCY, 0.6f);
+  smoothing.initSmoothing(FREQUENCY, 0.7f);
 }
  
 void loop() {
   // Central (Raspberry) verbindet sich dann mit dem Nano
   BLEDevice central = BLE.central();
 
+  // Frage nach Updates und neuen Notifications
   BLE.poll();
 
+  // Check ob BLE Verbindung noch besteht
+  if(currentState != DISCONNECTED && (!central || !central.connected())){
+    currentState = DISCONNECTED;
+  }
+
+  // ===============================
+  // ======== STATE MACHINE ========
+  // ===============================
   switch(currentState) {
     // ==== RECONNECTING STATE ====
     case DISCONNECTED:
@@ -164,12 +187,12 @@ void loop() {
       if(!(millis() - lastSendTime >= 1000 / FREQUENCY)) {
         break;
       }
-      float gyroMag;
+      
       lastSendTime = millis();
       sensor.getCalculatedData(_Quaternion, ax, ay, az, mx, my, mz, gyroMag);
       sensor.getTemperature(tempC);
 
-      //smoothing.smooth(_Quaternion);
+      smoothing.smoothQuaternion(_Quaternion, millis());
 
       // SensorData Struct mit aktuellen Werten füllen
       sensorData.timestamp_ms = millis();
@@ -188,26 +211,29 @@ void loop() {
       dataCharacteristic.writeValue((byte*)&sensorData, sizeof(sensorData));
 
       // IDLE Detection
-      float accelMag = sqrt(ax*ax + ay*ay + (az-1)*(az-1));
+      accelMag = sqrt(ax*ax + ay*ay + (az-1)*(az-1));
       if(accelMag < 0.03f && gyroMag < 10.0f) {
         idlecount++;
         if(idlecount > idleCountMax){
           // Go IDLE
           currentState = IDLE;
+          idlecount = 0;
         }
       }
       break;
 
+    // ==== IDLE ====
     case IDLE:
       if(!idle){ 
         // Sendet eine IDLE Nachricht falls noch nicht geschehen
         controlCharacteristic.writeValue(&CMD_IDLE, 1);
         idle = true;
+        idlecount = 0;
       }
 
       sensor.getCalculatedData(_Quaternion, ax, ay, az, mx, my, mz, gyroMag);
-      float accelMag = sqrt(ax*ax + ay*ay + az*az);
-      float magnetMag = sqrt(mx*mx + my*my + mz*mz);
+      accelMag = sqrt(ax*ax + ay*ay + az*az);
+      magnetMag = sqrt(mx*mx + my*my + mz*mz);
 
       // Aufnahme Detection
       if((accelMag - 1) > 0 || gyroMag > 10.0f){
@@ -225,12 +251,13 @@ void loop() {
       }
       break;
 
+    // ==== PLATFORM ====
     case PLATFORM:
       sensor.getCalculatedData(_Quaternion, ax, ay, az, mx, my, mz, gyroMag);
       accelMag = sqrt(ax*ax + ay*ay + az*az);
 
       // Aufnahme Detection
-      if((accelMag - 1) > 0 || gyroMag > 10.0f){
+      if((accelMag - 1) > 0 || gyroMag > 200.0f){   // DEBUG!
         // Bewegung erkannt -> gehe zu state RUNNING
         controlCharacteristic.writeValue(&CMD_RUNNING, 1);
         idle = false;
