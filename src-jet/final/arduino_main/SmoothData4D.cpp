@@ -25,7 +25,6 @@ SmoothQuaternionData::SmoothQuaternionData() {
     arm_fill_f32(0.0f, _smoothedQuaternions, 4);
     arm_fill_f32(0.0f, _lastQuaternions, 4);
 }
-
 void SmoothQuaternionData::initSmoothing(float targetFrequency, float alpha) {
     // ARM FPU: constrain sehr schnell
     this->alpha = constrain(alpha, 0.01f, 0.99f);

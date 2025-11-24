@@ -250,13 +250,6 @@ void RotationManager::ahrsMeasure(){
 
   // 4. An AHRS (Madgwick) übergeben
   // Wenn Magnetometer-Werte nicht berücksichtigt werden, updateIMU() verwenden
-/*   if (magValid) {
-    filter.update(data.gx, data.gy, data.gz,
-                  data.ax, data.ay, data.az,
-                  data.mx, data.my, data.mz);
-  } else {
-    filter.updateIMU(data.gx, data.gy, data.gz, data.ax, data.ay, data.az);
-  } */
   if (magValid) {
     filter.update(data.gy, data.gx, data.gz,
                   data.ay, data.ax, data.az,
@@ -397,9 +390,16 @@ void RotationManager::adaptiveFilterGain(float ax, float ay, float az, float gx,
   } else {
     filter.beta = BETA_NORM_HIGH;
   }
-
 }
 
+void RotationManager::switchCustomMagCalibration(bool useCustom){
+  if(useCustom){
+    // Kalibrierung aus dem Flash auslesen
+    
+  } else {
+
+  }
+}
 
 // DATENKORREKTUR (Achseninvertierungen etc)
 void RotationManager::realignAccel(float& ax, float& ay, float& az) {

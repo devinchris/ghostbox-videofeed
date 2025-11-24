@@ -212,7 +212,7 @@ void loop() {
 
       // IDLE Detection
       accelMag = sqrt(ax*ax + ay*ay + (az-1)*(az-1));
-      if(accelMag < 0.03f && gyroMag < 10.0f) {
+      if(accelMag < 0.05f && gyroMag < 10.0f) {
         idlecount++;
         if(idlecount > idleCountMax){
           // Go IDLE
@@ -235,8 +235,10 @@ void loop() {
       accelMag = sqrt(ax*ax + ay*ay + az*az);
       magnetMag = sqrt(mx*mx + my*my + mz*mz);
 
+      Serial.print(magnetMag);
+
       // Aufnahme Detection
-      if((accelMag - 1) > 0 || gyroMag > 10.0f){
+      if((accelMag - 1) > 0.05 || gyroMag > 15.0f){
         // Bewegung erkannt -> gehe zu state RUNNING
         controlCharacteristic.writeValue(&CMD_RUNNING, 1);
         idle = false;
@@ -257,7 +259,7 @@ void loop() {
       accelMag = sqrt(ax*ax + ay*ay + az*az);
 
       // Aufnahme Detection
-      if((accelMag - 1) > 0 || gyroMag > 200.0f){   // DEBUG!
+      if((accelMag - 1) > 0.05 || gyroMag > 200.0f){   // DEBUG!
         // Bewegung erkannt -> gehe zu state RUNNING
         controlCharacteristic.writeValue(&CMD_RUNNING, 1);
         idle = false;

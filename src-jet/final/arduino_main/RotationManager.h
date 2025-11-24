@@ -30,6 +30,8 @@ public:
     
     // Getter für Temperatur
     void getTemperature(float& celsius);
+
+    void switchCustomMagCalibration(bool useCustom);
     
     // Getter für Euler-Winkel -> Irrelevant aber mb für debugging idgaf
     // void getEulerAngles(float& roll, float& pitch, float& yaw);
@@ -105,15 +107,16 @@ private:
     // Magnetische Soft-Iron-Kalibrierung (3x3 Matrix)
     // Raum Pascal
     const float MAG_SOFT_IRON_MATRIX[3][3] = {
-      {1.098, -0.014, -0.016},
-      {-0.01,  1.010,  0.002},
-      {0.016,  0.002,  1.108}   // 0, 0, 0.108 (!!!)
-                                // Versehentlich wurde der letzte Wert auf 0.108 statt 1.108 gesetzt
-                                // Ergebnis: Es lief besser (!) als zuvor...
+      {1.058, -0.017, -0.019},
+      {-0.02,  1.075,  0.005},
+      {0.019,  0.005,  1.113}   // 0, 0, 0.108 
     }; 
+
     const float MAG_HARD_IRON_OFFSET[3] = {
-      16.772, -18.925, -45.458           // X, Y, Z Offsets
+      -80.257, 37.515, 0.759           // X, Y, Z Offsets   16.772, -18.925, -45.458
     };
+
+    bool useCustomMagCal = false;
 
     // Lounge
     /*
