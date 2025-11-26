@@ -23,6 +23,11 @@ const uint8_t CMD_CALIBRATE_MAG = 0x03;      // Jet kalibriert sein Magnetometer
 
 const uint8_t INFO_MAGNETMODE = 0x05;        // Info: AHRS Modus (um auf dem LCD anzuzeigen)
 
+const uint8_t CMD_CAL_START = 0x30;          // Start Magnetometer Kalibrierung
+const uint8_t CMD_CAL_STOP = 0x31;           // Stop Magnetometer Kalibrierung
+const uint8_t CMD_CAL_MATRIX = 0x32;         // Erhalte Kalibrierungsmatrix
+const uint8_t CMD_SWITCH_PRESET = 0x33;      // Wechsle Magnetometer Preset (STANDARD, INDIVIDUAL, IMU)
+
 enum State {
   RUNNING,        // Main Loop - sendet Sensordaten
   CALIBRATING,    // Magnetometer Kalibrierung läuft
@@ -48,6 +53,17 @@ struct MagnoValues {
   float mx, my, mz;             // in µTesla    
 } __attribute__((packed));      // Verhindert Padding
 
+struct CalibrationPayload {
+  float softIron[3][3];         // 3x3 Matrix (row-major)
+  float hardIron[3];            // Hard-Iron Offsets
+} __attribute__((packed));
+
+static const size_t CALIBRATION_FLOATS = 12;      // 3x3 Matrix + 3 Offsets
+static const size_t CALIBRATION_PACKET_SIZE = CALIBRATION_FLOATS * sizeof(float);
+
+CalibrationPayload latestCalibrationPayload = {};
+bool calibrationPayloadReceived = false;
+
 // === Globals === 
 SensorValues sensorData;
 MagnoValues magValues;
@@ -67,8 +83,11 @@ BLEService myService("19B10000-E8F2-537E-4F6C-D104768A1214");
 // === RotationManager ===
 RotationManager sensor;
 Quaternion _Quaternion;
+float gx = 0, gy = 0, gz = 0;
 float ax = 0, ay = 0, az = 0;
 float mx = 0, my = 0, mz = 0;
+
+float gx_bias[100], gy_bias[100], gz_bias[100];
 
 // === SmoothData4D ===
 SmoothQuaternionData smoothing;  
@@ -86,6 +105,14 @@ BLECharacteristic magCharacteristic("19B10002-E8F2-537E-4F6C-D104768A1214",
                                    // Commands (Idle, Platform, Kalibrierung)
 BLECharacteristic controlCharacteristic("19B10003-E8F2-537E-4F6C-D104768A1214",
                                    BLERead | BLEWrite | BLENotify, 1); // Steuerungs-Charakteristik
+
+BLECharacteristic commandCharacteristic("19B10004-E8F2-537E-4F6C-D104768A1214",
+                                   BLERead | BLEWrite | BLEWriteWithoutResponse | BLENotify, CALIBRATION_PACKET_SIZE);
+
+void handleCommandWrite(BLEDevice central, BLECharacteristic characteristic);
+void logCalibrationPayload(const CalibrationPayload& payload);
+void enterCalibrationMode();
+void exitCalibrationMode();
  
 void setup() {
   Serial.begin(115200);
@@ -108,12 +135,15 @@ void setup() {
   myService.addCharacteristic(dataCharacteristic);
   myService.addCharacteristic(magCharacteristic);
   myService.addCharacteristic(controlCharacteristic);
+  myService.addCharacteristic(commandCharacteristic);
  
   // Add service
   BLE.addService(myService);
  
   // Set initial value
   dataCharacteristic.writeValue("Ready");
+  commandCharacteristic.writeValue((byte*)&latestCalibrationPayload, CALIBRATION_PACKET_SIZE);
+  commandCharacteristic.setEventHandler(BLEWritten, handleCommandWrite);
  
   // Starte advertising
   BLE.advertise();
@@ -156,7 +186,7 @@ void loop() {
     
     // ==== MAGNETOMETER KALIBRIERUNG ====
     case CALIBRATING:
-      if(!(millis() - lastSendTime >= 1000 / MAG_FREQUENCY)) {
+      if(!(millis() - lastSendTime >= 2000 / MAG_FREQUENCY)) {
         break;
       }
       if(central.connected() == false) {
@@ -189,7 +219,7 @@ void loop() {
       }
       
       lastSendTime = millis();
-      sensor.getCalculatedData(_Quaternion, ax, ay, az, mx, my, mz, gyroMag);
+      sensor.getCalculatedData(_Quaternion, gx, gy, gz, ax, ay, az, mx, my, mz, gyroMag);
       sensor.getTemperature(tempC);
 
       smoothing.smoothQuaternion(_Quaternion, millis());
@@ -218,6 +248,8 @@ void loop() {
           // Go IDLE
           currentState = IDLE;
           idlecount = 0;
+        } else if(idlecount > (idleCountMax / 2)){
+          sensor.setFilterGain(0.7f); // Korrektur des Gyro Drift/Bias im IDLE
         }
       }
       break;
@@ -231,7 +263,7 @@ void loop() {
         idlecount = 0;
       }
 
-      sensor.getCalculatedData(_Quaternion, ax, ay, az, mx, my, mz, gyroMag);
+      sensor.getCalculatedData(_Quaternion, gx, gy, gz, ax, ay, az, mx, my, mz, gyroMag);
       accelMag = sqrt(ax*ax + ay*ay + az*az);
       magnetMag = sqrt(mx*mx + my*my + mz*mz);
 
@@ -250,12 +282,13 @@ void loop() {
         // Elektromagnet auf der Platform erkannt -> gehe zu state PLATFORM
         controlCharacteristic.writeValue(&CMD_PLATFORM_DETECTED, 1);
         currentState = PLATFORM;
+        delay(700); // Warte kurz, damit drehen der Platte nicht als RUNNING interpretiert wird
       }
       break;
 
     // ==== PLATFORM ====
     case PLATFORM:
-      sensor.getCalculatedData(_Quaternion, ax, ay, az, mx, my, mz, gyroMag);
+      sensor.getCalculatedData(_Quaternion, gx, gy, gz, ax, ay, az, mx, my, mz, gyroMag);
       accelMag = sqrt(ax*ax + ay*ay + az*az);
 
       // Aufnahme Detection
@@ -268,4 +301,101 @@ void loop() {
       break;
 
   }
+}
+
+void handleCommandWrite(BLEDevice central, BLECharacteristic characteristic) {
+  int packetLength = characteristic.valueLength();
+  if (packetLength <= 0) {
+    Serial.println("Command characteristic write with empty payload");
+    return;
+  }
+
+  if (packetLength == 1) {
+    uint8_t opcode = 0;
+    if (!characteristic.readValue(&opcode, 1)) {
+      Serial.println("Failed to read opcode from command characteristic");
+      return;
+    }
+
+    switch (opcode) {
+      case CMD_CAL_START:
+        enterCalibrationMode();
+        break;
+      case CMD_CAL_STOP:
+        exitCalibrationMode();
+        break;
+      default:
+        Serial.print("⚠️  Unbekannter Kalibrierungsbefehl: 0x");
+        Serial.println(opcode, HEX);
+        break;
+    }
+    return;
+  }
+
+  if (packetLength != (int)CALIBRATION_PACKET_SIZE) {
+    Serial.print("Calibration payload length unexpected: ");
+    Serial.println(packetLength);
+    return;
+  }
+
+  CalibrationPayload payload;
+  if (!characteristic.readValue((byte*)&payload, CALIBRATION_PACKET_SIZE)) {
+    Serial.println("Failed to read calibration payload from characteristic");
+    return;
+  }
+
+  latestCalibrationPayload = payload;
+  calibrationPayloadReceived = true;
+
+  Serial.println("\n===== Calibration payload via BLE =====");
+  logCalibrationPayload(payload);
+  Serial.println("======================================");
+
+  sensor.applyMagCalibration(payload.softIron, payload.hardIron, true);
+
+  // Sende ein kurzes ACK über die Control-Characteristic
+  controlCharacteristic.writeValue(&CMD_CALIBRATE_MAG, 1);
+}
+
+void enterCalibrationMode() {
+  if (currentState == CALIBRATING) {
+    Serial.println("Kalibrierung läuft bereits - ignoriere START");
+    return;
+  }
+  Serial.println("→ Starte Magnetometer-Kalibrierungsmodus");
+  currentState = CALIBRATING;
+  lastSendTime = 0;
+  idle = false;
+  controlCharacteristic.writeValue(&CMD_CALIBRATE_MAG, 1);
+}
+
+void exitCalibrationMode() {
+  if (currentState != CALIBRATING) {
+    Serial.println("Kalibrierung ist nicht aktiv - ignoriere STOP");
+    return;
+  }
+  Serial.println("Beende Magnetometer-Kalibrierungsmodus");
+  currentState = RUNNING;
+  controlCharacteristic.writeValue(&CMD_RUNNING, 1);
+}
+
+void logCalibrationPayload(const CalibrationPayload& payload) {
+  Serial.println("Soft-Iron Matrix (row-major):");
+  for (int row = 0; row < 3; row++) {
+    Serial.print("[ ");
+    for (int col = 0; col < 3; col++) {
+      Serial.print(payload.softIron[row][col], 6);
+      Serial.print(col < 2 ? ", " : " ");
+    }
+    Serial.println("]");
+  }
+
+  Serial.println("Hard-Iron Offset (µT):");
+  Serial.print("[ ");
+  Serial.print(payload.hardIron[0], 6);
+  Serial.print(", ");
+  Serial.print(payload.hardIron[1], 6);
+  Serial.print(", ");
+  Serial.print(payload.hardIron[2], 6);
+  Serial.println(" ]");
 }

@@ -23,7 +23,11 @@ public:
     void init(const float SAMPLE_FREQ = 25.0f);
 
     // PRIMARY Getter für alle berechneten Sensordaten
-    void getCalculatedData(Quaternion& quat, float& ax, float& ay, float& az, float& mx, float& my, float& mz, float& gyroMag);
+    void getCalculatedData(Quaternion& quat, 
+                           float& gx, float& gy, float& gz, 
+                           float& ax, float& ay, float& az, 
+                           float& mx, float& my, float& mz, 
+                           float& gyroMag);
     
     // Getter für Beschleunigung
     void getAccelValues(float& ax, float& ay, float& az);
@@ -35,9 +39,15 @@ public:
     
     // Getter für Euler-Winkel -> Irrelevant aber mb für debugging idgaf
     // void getEulerAngles(float& roll, float& pitch, float& yaw);
+
+    // Manueller Filter Gain im IDLE Modus
+    void setFilterGain(float gain); 
     
     // Loop-Frequenz abrufen
     int getLoopFrequency();
+
+    // Laufendes Gyro Bias update
+    void updateGyroBias(float gx_b, float gy_b, float gz_b);
 
     // Magnetometer Modus kann via Knopf auf der Drehplatte geswitcht werden
     enum class MagMode {
@@ -94,6 +104,7 @@ private:
     static constexpr float BETA_MAX = 0.3f;       
     static constexpr float BETA_NORM_LOW = 0.05f;
     static constexpr float BETA_NORM_HIGH = 0.1f;
+    bool adaptiveGainActive = true;
 
 
     // Axis alginment

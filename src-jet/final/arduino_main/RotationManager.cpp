@@ -272,11 +272,22 @@ void RotationManager::getTemperature(float& celsius){
 // =======================================
 // ==== MAIN Function für Sensordaten ====
 // =======================================
-void RotationManager::getCalculatedData(Quaternion& _quat, float& ax, float& ay, float& az, float& mx, float& my, float& mz, float& gyroMag){
+void RotationManager::getCalculatedData(
+  Quaternion& _quat, 
+  float& gx, float& gy, float& gz, 
+  float& ax, float& ay, float& az, 
+  float& mx, float& my, float& mz, 
+  float& gyroMag
+) {
     currTime = millis();
     ahrsMeasure();
     // Quaternion aus Madgwick Filter übernehmen 
     _quat = Quaternion(filter.q0, filter.q1, filter.q2, filter.q3);
+
+    // GYRO:
+    gx = data.gx;
+    gy = data.gy;
+    gz = data.gz;
 
     // ACCEL:
     ax = data.ax;
@@ -368,7 +379,10 @@ void RotationManager::adaptiveFilterGain(float ax, float ay, float az, float gx,
   float acc_mag = sqrt(ax*ax + ay*ay + az*az);
   float gyro_mag = sqrt(gx*gx + gy*gy + gz*gz);
   int counter;
-
+  if(!adaptiveGainActive){
+    adaptiveGainActive = true;
+    return;
+  }
   if(gyro_mag > 200.0f){
     // Bei schnellen Drehungen
     filter.beta = BETA_NORM_HIGH;
@@ -390,6 +404,17 @@ void RotationManager::adaptiveFilterGain(float ax, float ay, float az, float gx,
   } else {
     filter.beta = BETA_NORM_HIGH;
   }
+}
+
+void RotationManager::setFilterGain(float gain){
+  filter.beta = gain;
+  adaptiveGainActive = false;
+}
+
+void RotationManager::updateGyroBias(float gx_b, float gy_b, float gz_b){
+  gx_off += gx_b;
+  gy_off += gy_b;
+  gz_off += gz_b;
 }
 
 void RotationManager::switchCustomMagCalibration(bool useCustom){
