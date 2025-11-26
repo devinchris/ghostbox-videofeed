@@ -219,7 +219,7 @@ void loop() {
       }
       
       lastSendTime = millis();
-      sensor.getCalculatedData(_Quaternion, gx, gy, gz, ax, ay, az, mx, my, mz, gyroMag);
+      sensor.getCalculatedData(_Quaternion, gx, gy, gz, ax, ay, az, mx, my, mz);
       sensor.getTemperature(tempC);
 
       smoothing.smoothQuaternion(_Quaternion, millis());
@@ -240,8 +240,10 @@ void loop() {
       
       dataCharacteristic.writeValue((byte*)&sensorData, sizeof(sensorData));
 
+      accelMag = sensor.cachedAccelMag;
+      gyroMag = sensor.cachedGyroMag;
+
       // IDLE Detection
-      accelMag = sqrt(ax*ax + ay*ay + (az-1)*(az-1));
       if(accelMag < 0.05f && gyroMag < 10.0f) {
         idlecount++;
         if(idlecount > idleCountMax){
@@ -263,9 +265,10 @@ void loop() {
         idlecount = 0;
       }
 
-      sensor.getCalculatedData(_Quaternion, gx, gy, gz, ax, ay, az, mx, my, mz, gyroMag);
-      accelMag = sqrt(ax*ax + ay*ay + az*az);
-      magnetMag = sqrt(mx*mx + my*my + mz*mz);
+      sensor.getCalculatedData(_Quaternion, gx, gy, gz, ax, ay, az, mx, my, mz);
+      accelMag = sensor.cachedAccelMag;
+      magnetMag = sensor.cachedMagnoMag;
+      gyroMag = sensor.cachedGyroMag;
 
       Serial.print(magnetMag);
 
@@ -288,11 +291,11 @@ void loop() {
 
     // ==== PLATFORM ====
     case PLATFORM:
-      sensor.getCalculatedData(_Quaternion, gx, gy, gz, ax, ay, az, mx, my, mz, gyroMag);
-      accelMag = sqrt(ax*ax + ay*ay + az*az);
-
+      sensor.getCalculatedData(_Quaternion, gx, gy, gz, ax, ay, az, mx, my, mz);
+      accelMag = sensor.cachedAccelMag;
+      gyroMag = sensor.cachedGyroMag;
       // Aufnahme Detection
-      if((accelMag - 1) > 0.05 || gyroMag > 200.0f){   // DEBUG!
+      if((accelMag - 1) > 0.05 /* || gyroMag > 200.0f */){   // DEBUG!
         // Bewegung erkannt -> gehe zu state RUNNING
         controlCharacteristic.writeValue(&CMD_RUNNING, 1);
         idle = false;

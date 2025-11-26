@@ -327,14 +327,15 @@ void RotationManager::ahrsMeasure(){
     filter.update(data.gy, data.gx, data.gz,
                   data.ay, data.ax, data.az,
                   data.my, data.mx, data.mz);
+    cachedMagnoMag = sqrt(data.mx*data.mx + data.my*data.my + data.mz*data.mz);
   } else {
     filter.updateIMU(data.gy, data.gx, data.gz, data.ay, data.ax, data.az);
+    cachedMagnoMag = 0.0f;
   }
-
-  // DEBUG
-  Serial.println("");
-  debugEulerAngles();
-  debugMeasurements(Quaternion(filter.q0, filter.q1, filter.q2, filter.q3), data.ax, data.ay, data.az, data.mx, data.my, data.mz);
+  
+  // Beträge berechnen
+  cachedAccelMag = sqrt(data.ax*data.ax + data.ay*data.ay + data.az*data.az);
+  cachedGyroMag = sqrt(data.gx*data.gx + data.gy*data.gy + data.gz*data.gz);
  }
 
 void RotationManager::getTemperature(float& celsius){
@@ -349,8 +350,7 @@ void RotationManager::getCalculatedData(
   Quaternion& _quat, 
   float& gx, float& gy, float& gz, 
   float& ax, float& ay, float& az, 
-  float& mx, float& my, float& mz, 
-  float& gyroMag
+  float& mx, float& my, float& mz
 ) {
     currTime = millis();
     ahrsMeasure();

@@ -25,8 +25,8 @@ public:
     void getCalculatedData(Quaternion& quat, 
                            float& gx, float& gy, float& gz, 
                            float& ax, float& ay, float& az, 
-                           float& mx, float& my, float& mz, 
-                           float& gyroMag);
+                           float& mx, float& my, float& mz
+    );
     
     // Getter für Beschleunigung
     void getAccelValues(float& ax, float& ay, float& az);
@@ -48,6 +48,11 @@ public:
 
     // Laufendes Gyro Bias update
     void updateGyroBias(float gx_b, float gy_b, float gz_b);
+
+    // Magnitudes / Beträge
+    float cachedAccelMag = 0.0f;
+    float cachedGyroMag = 0.0f;
+    float cachedMagnoMag = 0.0f;
 
     // Magnetometer Modus kann via Knopf auf der Drehplatte geswitcht werden
     enum class MagMode {
