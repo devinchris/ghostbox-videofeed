@@ -45,6 +45,15 @@ RotationManager::RotationManager() {
   previousMillis = 0;
   gx_off = gy_off = gz_off = 0;
   ax_off = ay_off = az_off = 0;
+
+  for (int r = 0; r < 3; r++) {
+    for (int c = 0; c < 3; c++) {
+      magSoftIron[r][c] = DEFAULT_MAG_SOFT_IRON_MATRIX[r][c];
+    }
+    magHardIron[r] = DEFAULT_MAG_HARD_IRON_OFFSET[r];
+  }
+  magCalBlob.magic = MAG_CAL_MAGIC;
+  magCalBlob.isCalibrated = false;
 }
 
 void RotationManager::init(float SAMPLE_FREQ) {
@@ -60,21 +69,7 @@ void RotationManager::init(float SAMPLE_FREQ) {
   
   Serial.println("✓ IMU initialisiert");
   
-  // Lade Magnetometer Kalibrierung aus dem Flash
-  int rc = flashPrefs.readPrefs(&magCal, sizeof(magCal));
-  
-  if (rc == 0 && magCal.isCalibrated) {
-    Serial.println("✓ Magnetometer-Kalibrierung geladen:");
-    Serial.print("  X-Offset: "); Serial.print(magCal.magOffsetX, 2); Serial.println(" µT");
-    Serial.print("  Y-Offset: "); Serial.print(magCal.magOffsetY, 2); Serial.println(" µT");
-    Serial.print("  Z-Offset: "); Serial.print(magCal.magOffsetZ, 2); Serial.println(" µT");
-  } else {
-    Serial.println("WARNUNG: Keine Kalibrierung gefunden!");
-    Serial.println("   Bitte erst Kalibrier-Sketch ausführen!");
-    magCal.magOffsetX = 0;
-    magCal.magOffsetY = 0;
-    magCal.magOffsetZ = 0;
-  }
+  loadMagCalibrationFromFlash();
   calibrateGyro();
   calibrateAccel();
   // delay(1000);  //DEBUG
@@ -132,6 +127,84 @@ Serial.println("Kalibriere Accelerometer... Stillhalten!");
   Serial.print(ax_off, 2); Serial.print(", ");
   Serial.print(ay_off, 2); Serial.print(", ");
   Serial.println(az_off, 2);
+}
+
+void RotationManager::loadMagCalibrationFromFlash() {
+  MagCalibrationBlob blob;
+  int rc = flashPrefs.readPrefs(&blob, sizeof(blob));
+
+  if (rc == 0 && blob.magic == MAG_CAL_MAGIC && blob.isCalibrated) {
+    applyMagCalibration(blob.softIron, blob.hardIron, false);
+    magCalBlob = blob;
+    customMagCalActive = true;
+    Serial.println("Calib Data aus Flash geladen");
+    Serial.print("  Hard-Iron: [");
+    Serial.print(magHardIron[0], 2); Serial.print(", ");
+    Serial.print(magHardIron[1], 2); Serial.print(", ");
+    Serial.print(magHardIron[2], 2); Serial.println("] µT");
+  } else {
+    customMagCalActive = false;
+    Serial.println("Keine gültige Daten im Flash. Verwende Default-Werte.");
+  }
+}
+
+void RotationManager::saveMagCalibrationToFlash() {
+  magCalBlob.magic = MAG_CAL_MAGIC;
+  magCalBlob.isCalibrated = true;
+  for (int r = 0; r < 3; r++) {
+    for (int c = 0; c < 3; c++) {
+      magCalBlob.softIron[r][c] = magSoftIron[r][c];
+    }
+    magCalBlob.hardIron[r] = magHardIron[r];
+  }
+
+  int rc = flashPrefs.writePrefs(&magCalBlob, sizeof(magCalBlob));
+  if (rc == 0) {
+    Serial.println("✓ Magnetometer-Kalibrierung im Flash gespeichert");
+  } else {
+    Serial.print("Fehler beim Schreiben der Magnetometer-Kalibrierung: ");
+    Serial.println(rc);
+  }
+}
+
+void RotationManager::applyMagCalibration(const float softIron[3][3], const float hardIron[3], bool persist) {
+  for (int r = 0; r < 3; r++) {
+    for (int c = 0; c < 3; c++) {
+      magSoftIron[r][c] = softIron[r][c];
+    }
+    magHardIron[r] = hardIron[r];
+  }
+  customMagCalActive = true;
+
+  Serial.println("Neue Magnetometer-Kalibrierung übernommen");
+  Serial.print("  Hard-Iron: [");
+  Serial.print(magHardIron[0], 3); Serial.print(", ");
+  Serial.print(magHardIron[1], 3); Serial.print(", ");
+  Serial.print(magHardIron[2], 3); Serial.println("] µT");
+
+  if (persist) {
+    saveMagCalibrationToFlash();
+  }
+}
+
+void RotationManager::clearPersistedMagCalibration() {
+  customMagCalActive = false;
+  for (int r = 0; r < 3; r++) {
+    for (int c = 0; c < 3; c++) {
+      magSoftIron[r][c] = DEFAULT_MAG_SOFT_IRON_MATRIX[r][c];
+    }
+    magHardIron[r] = DEFAULT_MAG_HARD_IRON_OFFSET[r];
+  }
+
+  MagCalibrationBlob emptyBlob = {};
+  emptyBlob.magic = MAG_CAL_MAGIC;
+  emptyBlob.isCalibrated = false;
+  flashPrefs.writePrefs(&emptyBlob, sizeof(emptyBlob));
+  Serial.println("Magnetometer-Kalibrierung auf Werkseinstellungen zurückgesetzt");
+}
+
+void RotationManager::loadMagCalibration() {
+  loadMagCalibrationFromFlash();
 }
 
 // =============== DEBUG ===============
@@ -318,23 +391,23 @@ void RotationManager::calculateMagnetometerData(float& mx, float& my, float& mz)
     
     // 1. Hard Iron Correction
     // Offsets Berechnet mit Magneto 1.2
-    float mx_hard = mx_raw - MAG_HARD_IRON_OFFSET[0];
-    float my_hard = my_raw - MAG_HARD_IRON_OFFSET[1];
-    float mz_hard = mz_raw - MAG_HARD_IRON_OFFSET[2];
+  float mx_hard = mx_raw - magHardIron[0];
+  float my_hard = my_raw - magHardIron[1];
+  float mz_hard = mz_raw - magHardIron[2];
     
     // 2. Soft Iron Correction
     // 3x3 Matrix berechnet mit Magneto 1.2
-    float mx_soft = MAG_SOFT_IRON_MATRIX[0][0] * mx_hard +
-                    MAG_SOFT_IRON_MATRIX[0][1] * my_hard +
-                    MAG_SOFT_IRON_MATRIX[0][2] * mz_hard;
+  float mx_soft = magSoftIron[0][0] * mx_hard +
+          magSoftIron[0][1] * my_hard +
+          magSoftIron[0][2] * mz_hard;
     
-    float my_soft = MAG_SOFT_IRON_MATRIX[1][0] * mx_hard +
-                    MAG_SOFT_IRON_MATRIX[1][1] * my_hard +
-                    MAG_SOFT_IRON_MATRIX[1][2] * mz_hard;
+  float my_soft = magSoftIron[1][0] * mx_hard +
+          magSoftIron[1][1] * my_hard +
+          magSoftIron[1][2] * mz_hard;
     
-    float mz_soft = MAG_SOFT_IRON_MATRIX[2][0] * mx_hard +
-                    MAG_SOFT_IRON_MATRIX[2][1] * my_hard +
-                    MAG_SOFT_IRON_MATRIX[2][2] * mz_hard;
+  float mz_soft = magSoftIron[2][0] * mx_hard +
+          magSoftIron[2][1] * my_hard +
+          magSoftIron[2][2] * mz_hard;
     
     float mag_magnitude = sqrt(mx_soft*mx_soft + my_soft*my_soft + mz_soft*mz_soft);
 
@@ -418,11 +491,10 @@ void RotationManager::updateGyroBias(float gx_b, float gy_b, float gz_b){
 }
 
 void RotationManager::switchCustomMagCalibration(bool useCustom){
-  if(useCustom){
-    // Kalibrierung aus dem Flash auslesen
-    
+  if (useCustom) {
+    loadMagCalibrationFromFlash();
   } else {
-
+    clearPersistedMagCalibration();
   }
 }
 

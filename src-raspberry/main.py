@@ -48,6 +48,7 @@ RECONNECT_BACKOFF = 1.5
 # Magnetometer calibration settings
 EARTH_MAGNETIC_FIELD_UT = 47  # Approximate field strength in Germany (µT)
 MIN_CALIBRATION_SAMPLES = 500
+CALIBRATION_COLLECTION_TIMEOUT = 132.0  # seconds (2 minutes 12 seconds)
 
 # ----------------------------
 # Commands
@@ -75,6 +76,7 @@ class CalibrationCmd:
     START_MAG_CALIBRATION = 0x30
     STOP_MAG_CALIBRATION = 0x31
     SEND_CALIBRATION_MATRIX = 0x32
+    SWITCH_MAG_PRESET = 0x33            # TODO: Implement preset switching
 
 class SystemState:
     DISCONNECTED = "DISCONNECTED"
@@ -86,7 +88,7 @@ class SystemState:
     CALIBRATING = "CALIBRATING"
 
 # ----------------------------
-# Jet Device
+# MARK: - Jet Device
 # ----------------------------
 class JetDevice:
     def __init__(self, device, system_controller=None):
@@ -100,6 +102,8 @@ class JetDevice:
         self.data_records = []
         self.last_sensor_data = None
         self.mag_data_buffer = []
+        self._calibration_stop_event = asyncio.Event()
+        self._awaiting_calibration_stop = False
 
     def _notify_data_callback(self, sender, data):
         asyncio.create_task(self.notification_handler_data(sender, data))
@@ -141,6 +145,14 @@ class JetDevice:
         except struct.error as e:
             logger.error(f"[{self.name}] Struct unpack error: {e}")
             return
+        
+        logger.info(
+            f"t={timestamp_ms:7d} ms | "
+            f"Accel=({accelX:7.3f}, {accelY:7.3f}, {accelZ:7.3f}) | "
+            f"Quat=({q0:6.3f}, {q1:6.3f}, {q2:6.3f}, {q3:6.3f}) | "
+            f"Mag=({magX:7.2f}, {magY:7.2f}, {magZ:7.2f}) | "
+            f"T={temp:5.2f}°C"
+            )
 
     async def notification_handler_mag(self, sender, data):
         """Handle magnetometer data during calibration"""
@@ -162,12 +174,17 @@ class JetDevice:
             logger.info("🛑 JET STATUS: IDLE detected")
             if self.system:
                 await self.system.on_jet_idle()
+        elif cmd == JetCmd.CALIBRATE_MAG:
+            logger.info("🧭 JET STATUS: Calibration mode active")
         elif cmd == JetCmd.PLATFORM_DETECTED:
             logger.info("🧲 JET STATUS: Platform detected")
             if self.system:
                 await self.system.on_platform_detected()
         elif cmd == JetCmd.RUNNING:
             logger.info("✈️  JET STATUS: Running/Moving")
+            if self._awaiting_calibration_stop:
+                self._calibration_stop_event.set()
+                self._awaiting_calibration_stop = False
             if self.system:
                 await self.system.on_jet_running()
         else:
@@ -240,10 +257,14 @@ class JetDevice:
 
     async def start_mag_calibration(self):
         logger.info("→ Commanding Jet to start magnetometer calibration")
-        return await self.send_command(CalibrationCmd.START_MAG_CALIBRATION)
+        self._calibration_stop_event.clear()
+        success = await self.send_command(CalibrationCmd.START_MAG_CALIBRATION)
+        self._awaiting_calibration_stop = bool(success)
+        return success
 
     async def stop_mag_calibration(self):
         logger.info("→ Commanding Jet to stop magnetometer calibration")
+        self._awaiting_calibration_stop = False
         return await self.send_command(CalibrationCmd.STOP_MAG_CALIBRATION)
 
     async def send_calibration_matrix(self, calibration_result):
@@ -277,8 +298,22 @@ class JetDevice:
                 logger.exception(f"{self.name}: Failed to send calibration parameters")
                 return False
 
+    async def wait_for_calibration_stop(self, timeout):
+        if not self._awaiting_calibration_stop:
+            logger.warning(f"{self.name}: Not awaiting calibration stop signal")
+            return False
+        try:
+            await asyncio.wait_for(self._calibration_stop_event.wait(), timeout=timeout)
+            logger.info(f"{self.name}: Calibration stop signal received")
+            self._calibration_stop_event.clear()
+            self._awaiting_calibration_stop = False
+            return True
+        except asyncio.TimeoutError:
+            self._awaiting_calibration_stop = False
+            raise
+
 # ----------------------------
-# Table Device
+# MARK: - Podest Device
 # ----------------------------
 class TableDevice:
     def __init__(self, device, system_controller=None):
@@ -319,7 +354,7 @@ class TableDevice:
             return
         button_state = data[0]
         if button_state == 0x01:
-            logger.info("🔘 TABLE: Button pressed - initiating magnetometer calibration")
+            logger.info(" TABLE: Button pressed - initiating magnetometer calibration")
             if self.system:
                 await self.system.on_calibration_button_pressed()
 
@@ -462,6 +497,7 @@ class SystemController:
         self._state_lock = asyncio.Lock()
         self._workflow_active = False
         self._calibration_active = False
+        self._magnet_timeout_task = None
 
     async def on_jet_idle(self):
         async with self._state_lock:
@@ -482,12 +518,33 @@ class SystemController:
                 self.state = SystemState.JET_RUNNING
                 return
             
-            await asyncio.sleep(0.5)
             self.state = SystemState.WAITING_FOR_PLATFORM
-            logger.info("⏳ Waiting for platform detection...")
+            logger.info("⏳ Waiting for platform detection (1 second window)...")
+            
+            # Start timeout task - deactivate magnet after 1 second
+            self._magnet_timeout_task = asyncio.create_task(self._magnet_timeout())
 
-            await asyncio.sleep(0.5)
-            await self.table.deactivate_magnet()
+
+    async def _magnet_timeout(self):
+        """Deactivate magnet after 1 second if no platform detected"""
+        try:
+            await asyncio.sleep(1.0)
+            
+            async with self._state_lock:
+                if self.state == SystemState.WAITING_FOR_PLATFORM:
+                    logger.info("\n" + "="*60)
+                    logger.info("⏱️  TIMEOUT: No platform detected within 1 second")
+                    logger.info("="*60 + "\n")
+                    
+                    await self.table.deactivate_magnet()
+                    
+                    logger.info("⚠️  Workflow aborted - returning to normal operation")
+                    self.state = SystemState.JET_RUNNING
+                    self._workflow_active = False
+                    self._magnet_timeout_task = None
+        except asyncio.CancelledError:
+            # Timeout was cancelled because platform was detected
+            logger.debug("Magnet timeout cancelled - platform was detected")
 
     async def on_platform_detected(self):
         async with self._state_lock:
@@ -495,12 +552,19 @@ class SystemController:
                 logger.debug(f"Platform detected but wrong state: {self.state}")
                 return
             
+            # Cancel the timeout task since platform was detected
+            if self._magnet_timeout_task:
+                self._magnet_timeout_task.cancel()
+                self._magnet_timeout_task = None
+
             logger.info("\n" + "="*60)
-            logger.info("🎯 WORKFLOW: Platform detected → Starting rotation")
+            logger.info("🎯 WORKFLOW: Platform detected → Deactivating magnet and starting rotation")
             logger.info("="*60 + "\n")
             
             self.state = SystemState.PLATFORM_DETECTED
-            await asyncio.sleep(1.0)
+            # Deactivate magnet before rotation
+            await self.table.deactivate_magnet()
+            await asyncio.sleep(0.5)
             
             success = await self.table.start_rotation()
             if not success:
@@ -540,11 +604,23 @@ class SystemController:
                 self.state = SystemState.JET_RUNNING
                 return
             
-            # Collect magnetometer data for 30 seconds
-            logger.info("📊 Collecting magnetometer data for 30 seconds...")
-            await asyncio.sleep(30.0)
-            
-            # Stop calibration on Jet
+            # Collect magnetometer data until Jet signals stop or timeout occurs
+            logger.info(
+                "📊 Collecting magnetometer data... waiting for Jet stop signal (max %.0f s)",
+                CALIBRATION_COLLECTION_TIMEOUT,
+            )
+            try:
+                await self.jet.wait_for_calibration_stop(CALIBRATION_COLLECTION_TIMEOUT)
+                logger.info("🛑 Jet reported calibration capture complete")
+            except asyncio.TimeoutError:
+                logger.error("❌ No stop signal received within %.0f seconds", CALIBRATION_COLLECTION_TIMEOUT)
+                await self.jet.stop_mag_calibration()
+                self._calibration_active = False
+                self.state = SystemState.JET_RUNNING
+                self.jet.mag_data_buffer = []
+                return
+
+            # Ensure calibration mode stops on Jet
             await self.jet.stop_mag_calibration()
             
             # Calculate calibration matrix
@@ -562,10 +638,10 @@ class SystemController:
             
             if success:
                 logger.info("\n" + "="*60)
-                logger.info("✅ CALIBRATION: Complete")
+                logger.info("CALIBRATION: Complete")
                 logger.info("="*60 + "\n")
             else:
-                logger.error("❌ Failed to send calibration matrix")
+                logger.error("Failed to send calibration matrix")
             
             self._calibration_active = False
             self.state = SystemState.JET_RUNNING
@@ -573,11 +649,15 @@ class SystemController:
 
     async def _abort_workflow(self):
         """Abort workflow and return to safe state"""
+        # Cancel any pending timeout
+        if self._magnet_timeout_task:
+            self._magnet_timeout_task.cancel()
+            self._magnet_timeout_task = None
+
         await self.table.stop_rotation()
-        await asyncio.sleep(0.2)
         await self.table.deactivate_magnet()
         
-        logger.info("⚠️  Workflow aborted - returning to normal operation")
+        logger.info("  Workflow aborted - returning to normal operation")
         self.state = SystemState.JET_RUNNING
         self._workflow_active = False
 

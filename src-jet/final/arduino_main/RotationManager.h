@@ -6,13 +6,12 @@
 #include "Arduino_BMI270_BMM150.h"
 #include "SmoothData4D.h"
 
-// Kalibrierungs-Struktur
-typedef struct {
-  float magOffsetX;
-  float magOffsetY;
-  float magOffsetZ;
+struct MagCalibrationBlob {
+  uint32_t magic;             // 0x4D43414C = 'MCAL'
+  float softIron[3][3];
+  float hardIron[3];
   bool isCalibrated;
-} MagCalibration;
+};
 
 class RotationManager {
 public:
@@ -33,9 +32,10 @@ public:
     void getAccelValues(float& ax, float& ay, float& az);
     
     // Getter für Temperatur
-    void getTemperature(float& celsius);
+  void getTemperature(float& celsius);
 
-    void switchCustomMagCalibration(bool useCustom);
+  void applyMagCalibration(const float softIron[3][3], const float hardIron[3], bool persist);
+  void clearPersistedMagCalibration();
     
     // Getter für Euler-Winkel -> Irrelevant aber mb für debugging idgaf
     // void getEulerAngles(float& roll, float& pitch, float& yaw);
@@ -64,9 +64,12 @@ private:
     unsigned long currTime;
     SmoothQuaternionData SmoothData;
 
-    // Kalibrierung
-    NanoBLEFlashPrefs flashPrefs;
-    MagCalibration magCal;
+  // Kalibrierung
+  NanoBLEFlashPrefs flashPrefs;
+  MagCalibrationBlob magCalBlob;
+  float magSoftIron[3][3];
+  float magHardIron[3];
+  bool customMagCalActive = false;
     float gx_off, gy_off, gz_off;  // Gyro-Offsets
     float ax_off, ay_off, az_off;  // Accel-Offsets
     
@@ -79,7 +82,9 @@ private:
     // Kalibrierungsfunktionen
     void calibrateGyro();
     void calibrateAccel();
-    void loadMagCalibration();
+  void loadMagCalibration();
+  void loadMagCalibrationFromFlash();
+  void saveMagCalibrationToFlash();
     static const int CALIBRATION_SAMPLES = 200;
 
     // Magnetometer Daten
@@ -115,23 +120,22 @@ private:
     void realignGyro(float& gx, float& gy, float& gz);
     void realignMag(float& mx, float& my, float& mz);
 
-    // Magnetische Soft-Iron-Kalibrierung (3x3 Matrix)
-    // Raum Pascal
-    const float MAG_SOFT_IRON_MATRIX[3][3] = {
+  static constexpr uint32_t MAG_CAL_MAGIC = 0x4D43414C; // 'MCAL'
+
+    // Magnetische Soft-Iron-Kalibrierung (Default)
+    static constexpr float DEFAULT_MAG_SOFT_IRON_MATRIX[3][3] = {
       {1.058, -0.017, -0.019},
       {-0.02,  1.075,  0.005},
       {0.019,  0.005,  1.113}   // 0, 0, 0.108 
     }; 
 
-    const float MAG_HARD_IRON_OFFSET[3] = {
+    static constexpr float DEFAULT_MAG_HARD_IRON_OFFSET[3] = {
       -80.257, 37.515, 0.759           // X, Y, Z Offsets   16.772, -18.925, -45.458
     };
 
-    bool useCustomMagCal = false;
-
     // Lounge
     /*
-    const float MAG_SOFT_IRON_MATRIX[3][3] = {
+    const float DEFAULT_MAG_SOFT_IRON_MATRIX[3][3] = {
       {1.109, -0.017, -0.012},
       {-0.01,  1.099,  0.001},
       {0.012,  0.001,  1.124} 
